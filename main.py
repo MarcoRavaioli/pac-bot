@@ -43,6 +43,9 @@ YF_TICKER_MAP = {
     "21XH": "21XH.DE"   # 21Shares Bitcoin ETP (Xetra)
 }
 
+# In-memory cache for T212 Ticker Suffixes (e.g "VUSA" -> "VUSA_l_EQ")
+T212_EXACT_TICKER_MAP = {}
+
 def ensure_data_dir():
     """Ensure data directory and CSV file exist."""
     os.makedirs(DATA_DIR, exist_ok=True)
@@ -103,6 +106,36 @@ def get_free_cash() -> float:
         logger.error(f"Failed to fetch free cash: {e}")
         return 0.0
 
+def resolve_t212_tickers():
+    """Fetch the exact Trading 212 ticker ID (e.g. VUSA_l_EQ) for the given short names."""
+    if T212_EXACT_TICKER_MAP:
+        return # Already resolved
+        
+    url = f"{T212_API_URL}/api/v0/equity/metadata/instruments"
+    try:
+        response = requests.get(url, headers=get_t212_headers(), timeout=10)
+        if response.status_code == 200:
+            instruments = response.json()
+            for asset in ASSETS:
+                # Try exact shortName match first
+                matches = [i for i in instruments if i.get("shortName") == asset]
+                if not matches:
+                    # Fallback to string inclusion matching
+                    matches = [i for i in instruments if asset in i.get("ticker", "")]
+                
+                if matches:
+                    # Prefer EUR currency if multiple found (like VUSA on Xetra vs LSE), else just take the first
+                    eur_matches = [m for m in matches if m.get("currencyCode") == "EUR"]
+                    best_match = eur_matches[0] if eur_matches else matches[0]
+                    T212_EXACT_TICKER_MAP[asset] = best_match["ticker"]
+                    logger.info(f"Resolved asset {asset} to Trading 212 Ticker: {best_match['ticker']} ({best_match.get('currencyCode')})")
+                else:
+                    logger.error(f"Could not find any Trading 212 instrument matching {asset}")
+        else:
+            logger.error(f"Failed to fetch instruments list: {response.status_code} - {response.text}")
+    except Exception as e:
+        logger.error(f"Exception fetching T212 instruments: {e}")
+
 def execute_buy_order(ticker: str, amount_eur: float, current_price_eur: float) -> bool:
     """Execute a market buy order using Trading 212 'quantity' target."""
     if not current_price_eur or current_price_eur <= 0:
@@ -111,9 +144,11 @@ def execute_buy_order(ticker: str, amount_eur: float, current_price_eur: float) 
         
     quantity = round(amount_eur / current_price_eur, 5)
     
+    exact_ticker = T212_EXACT_TICKER_MAP.get(ticker, ticker)
+    
     url = f"{T212_API_URL}/api/v0/equity/orders/market"
     payload = {
-        "ticker": ticker,
+        "ticker": exact_ticker,
         "quantity": quantity
     }
     
@@ -190,6 +225,7 @@ def run_trading_logic():
         return
 
     ensure_data_dir()
+    resolve_t212_tickers()
     
     free_cash = get_free_cash()
     logger.info(f"Current free cash: {free_cash} EUR")
