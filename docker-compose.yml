@@ -1,7 +1,5 @@
-version: '3.8'
-
 services:
-  t212-bot:
+  t212_bot:
     build: .
     container_name: t212-bot
     restart: unless-stopped
