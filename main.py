@@ -3,6 +3,7 @@ import time
 import logging
 import csv
 import datetime
+import base64
 from typing import List, Dict
 
 import requests
@@ -74,10 +75,21 @@ def get_last_trade_date() -> datetime.datetime:
         return None
 
 def get_t212_headers() -> Dict:
-    return {
-        "Authorization": f"{T212_API_KEY}",
-        "Content-Type": "application/json"
-    }
+    headers = {"Content-Type": "application/json"}
+    
+    api_id = os.getenv("TRADING212_ID")
+    api_key = os.getenv("T212_API_KEY")
+    
+    if api_id and api_key and api_key != "your_api_key_here":
+        # Nuovo schema di autenticazione T212 (Basic base64)
+        credentials = f"{api_id}:{api_key}"
+        encoded_credentials = base64.b64encode(credentials.encode('utf-8')).decode('utf-8')
+        headers["Authorization"] = f"Basic {encoded_credentials}"
+    else:
+        # Fallback al vecchio template se c'è solo una chiave
+        headers["Authorization"] = str(api_key)
+        
+    return headers
 
 def get_free_cash() -> float:
     """Fetch free cash from Trading 212."""
