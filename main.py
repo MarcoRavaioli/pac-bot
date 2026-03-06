@@ -136,13 +136,15 @@ def resolve_t212_tickers():
     except Exception as e:
         logger.error(f"Exception fetching T212 instruments: {e}")
 
-def execute_buy_order(ticker: str, amount_eur: float, current_price_eur: float) -> bool:
+def execute_buy_order(ticker: str, amount_eur: float, current_price_eur: float, attempt_precision: int = 5) -> bool:
     """Execute a market buy order using Trading 212 'quantity' target."""
     if not current_price_eur or current_price_eur <= 0:
         logger.error(f"Cannot buy {ticker}: invalid reference price ({current_price_eur})")
         return False
         
-    quantity = round(amount_eur / current_price_eur, 5)
+    quantity = round(amount_eur / current_price_eur, attempt_precision)
+    if attempt_precision == 0:
+        quantity = int(quantity)
     
     exact_ticker = T212_EXACT_TICKER_MAP.get(ticker, ticker)
     
@@ -160,6 +162,13 @@ def execute_buy_order(ticker: str, amount_eur: float, current_price_eur: float) 
             logger.info(f"Successfully placed order for {ticker}: {quantity} shares (~{amount_eur} EUR)")
             log_trade(ticker, current_price_eur, quantity, 0.0, round(amount_eur, 2)) 
             return True
+        elif response.status_code == 400 and "quantity-precision-mismatch" in response.text:
+            if attempt_precision > 0:
+                logger.warning(f"Precision {attempt_precision} rejected for {ticker}. Retrying with {attempt_precision - 1}...")
+                return execute_buy_order(ticker, amount_eur, current_price_eur, attempt_precision - 1)
+            else:
+                logger.error(f"Order failed for {ticker} even at 0 precision: {response.text}")
+                return False
         else:
             logger.error(f"Order failed for {ticker}: {response.status_code} - {response.text}")
             return False
@@ -230,6 +239,11 @@ def run_trading_logic():
     free_cash = get_free_cash()
     logger.info(f"Current free cash: {free_cash} EUR")
     
+    tradable_assets = [a for a in ASSETS if a in T212_EXACT_TICKER_MAP]
+    if not tradable_assets:
+        logger.error("No tradable assets found on Trading 212. Evaluation aborted.")
+        return
+    
     if free_cash < MIN_INVESTMENT_EUR:
         logger.info(f"Insufficient funds ({free_cash} < {MIN_INVESTMENT_EUR}).")
         return
@@ -244,7 +258,7 @@ def run_trading_logic():
     # Calculate Z-Scores
     z_scores = {}
     prices = {}
-    for asset in ASSETS:
+    for asset in tradable_assets:
         z, p_eur = calculate_z_score(asset, days=20)
         if z is not None:
             z_scores[asset] = z
