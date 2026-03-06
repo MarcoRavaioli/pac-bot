@@ -103,23 +103,27 @@ def get_free_cash() -> float:
         logger.error(f"Failed to fetch free cash: {e}")
         return 0.0
 
-def execute_buy_order(ticker: str, amount_eur: float) -> bool:
-    """Execute a market buy order using Trading 212 'VALUE' target."""
+def execute_buy_order(ticker: str, amount_eur: float, current_price_eur: float) -> bool:
+    """Execute a market buy order using Trading 212 'quantity' target."""
+    if not current_price_eur or current_price_eur <= 0:
+        logger.error(f"Cannot buy {ticker}: invalid reference price ({current_price_eur})")
+        return False
+        
+    quantity = round(amount_eur / current_price_eur, 5)
+    
     url = f"{T212_API_URL}/api/v0/equity/orders/market"
     payload = {
-        "instrumentCode": ticker,
-        "targetType": "VALUE",
-        "targetValue": round(amount_eur, 2)
+        "ticker": ticker,
+        "quantity": quantity
     }
     
     try:
         response = requests.post(url, headers=get_t212_headers(), json=payload, timeout=10)
         
-        # 200 OK means placed. T212 might execute asynchronously.
+        # 200 OK means placed.
         if response.status_code == 200:
-            logger.info(f"Successfully placed order for {ticker}: {amount_eur} EUR")
-            # For simplicity, logic assumes market order fills exactly. Polling orders could be added for exact precision.
-            log_trade(ticker, 0.0, 0.0, 0.0, round(amount_eur, 2)) 
+            logger.info(f"Successfully placed order for {ticker}: {quantity} shares (~{amount_eur} EUR)")
+            log_trade(ticker, current_price_eur, quantity, 0.0, round(amount_eur, 2)) 
             return True
         else:
             logger.error(f"Order failed for {ticker}: {response.status_code} - {response.text}")
@@ -128,29 +132,44 @@ def execute_buy_order(ticker: str, amount_eur: float) -> bool:
         logger.error(f"Exception during order execution for {ticker}: {e}")
         return False
 
-def calculate_z_score(ticker: str, days: int = 20) -> float:
-    """Fetch last ~30 days, calculate Z-Score for the last 20 days."""
+def calculate_z_score(ticker: str, days: int = 20) -> tuple:
+    """Fetch last ~30 days, calculate Z-Score for the last 20 days. Returns (z_score, price_eur)."""
     yf_ticker = YF_TICKER_MAP.get(ticker, ticker)
     try:
         ticker_data = yf.Ticker(yf_ticker)
         hist = ticker_data.history(period="1mo")
         if hist.empty or len(hist) < days:
             logger.warning(f"Not enough data to calculate Z-Score for {ticker}")
-            return None
+            return None, None
             
         closes = hist['Close'].tail(days)
         mean = closes.mean()
         std = closes.std()
         
-        if std == 0:
-            return 0.0
-            
         current_price = closes.iloc[-1]
-        z_score = (current_price - mean) / std
-        return z_score
+        z_score = 0.0 if std == 0 else (current_price - mean) / std
+        
+        # Convert to EUR
+        currency = ticker_data.fast_info.get('currency', 'USD')
+        price_eur = current_price
+        
+        if currency == 'GBp':
+            fx = yf.Ticker('GBPEUR=X').history(period='1d')
+            fx_val = fx['Close'].iloc[-1] if not fx.empty else 1.17
+            price_eur = (current_price / 100.0) * fx_val
+        elif currency == 'GBP':
+            fx = yf.Ticker('GBPEUR=X').history(period='1d')
+            fx_val = fx['Close'].iloc[-1] if not fx.empty else 1.17
+            price_eur = current_price * fx_val
+        elif currency == 'USD':
+            fx = yf.Ticker('USDEUR=X').history(period='1d')
+            fx_val = fx['Close'].iloc[-1] if not fx.empty else 0.92
+            price_eur = current_price * fx_val
+            
+        return z_score, price_eur
     except Exception as e:
         logger.error(f"Failed to calculate Z-Score for {ticker}: {e}")
-        return None
+        return None, None
 
 def is_market_open() -> bool:
     """Basic check to avoid placing orders on weekends."""
@@ -188,11 +207,13 @@ def run_trading_logic():
 
     # Calculate Z-Scores
     z_scores = {}
+    prices = {}
     for asset in ASSETS:
-        z = calculate_z_score(asset, days=20)
+        z, p_eur = calculate_z_score(asset, days=20)
         if z is not None:
             z_scores[asset] = z
-            logger.info(f"Z-Score for {asset}: {z:.2f}")
+            prices[asset] = p_eur
+            logger.info(f"Z-Score for {asset}: {z:.2f} (Price: {p_eur:.2f} EUR)")
 
     if not z_scores:
         logger.warning("Could not calculate any Z-scores.")
@@ -233,7 +254,7 @@ def run_trading_logic():
     for asset, z in assets_to_buy:
         if amount_per_asset >= MIN_INVESTMENT_EUR:
             logger.info(f"Attempting to buy {amount_per_asset:.2f} EUR of {asset}")
-            execute_buy_order(asset, amount_per_asset)
+            execute_buy_order(asset, amount_per_asset, prices[asset])
         else:
             logger.info(f"Calculated amount for {asset} ({amount_per_asset}) is below minimum ({MIN_INVESTMENT_EUR}).")
 
