@@ -105,9 +105,16 @@ Solo dopo Fasi 2-4 superate:
 - Fase 4 (paper trading): mesi, non settimane — è la parte che richiede pazienza reale.
 - Fase 5: nessuna data fissata finché le fasi precedenti non danno evidenza solida.
 
-## Punti aperti da chiudere con Marco
+## Decisioni prese
 
-- Cadenza di monitoraggio/notifiche (giornaliera vs settimanale via Telegram).
-- Conferma definitiva su ETF a leva come asset, o valutare un'alternativa prima di iniziare
-  il backtest.
-- Elenco esatto degli ETF a leva disponibili su Trading212 da includere come candidati.
+- **Cadenza notifiche**: riepilogo settimanale via Telegram + notifica immediata sugli
+  eventi importanti (trade eseguito, kill-switch scattato). Niente riepilogo giornaliero.
+- **Asset confermato**: ETF a leva 2x/3x su Trading212 (nessuna alternativa da valutare).
+
+## Punto aperto — bloccato da un problema tecnico trovato il 2026-09-06
+
+- Elenco esatto degli ETF a leva disponibili su Trading212 da includere come candidati:
+  **non recuperabile ora**. La API key del bot risponde `401 Unauthorized` su tutti gli
+  endpoint testati (cash e metadata/instruments). Vedi [runbook.md](runbook.md) per i
+  passi di rigenerazione della chiave — richiede accesso alla dashboard Trading212 di
+  Marco, non eseguibile da qui. Una volta rigenerata la chiave, si riprende da qui.
