@@ -292,3 +292,54 @@ dichiarato sopra prima di testare.
 Scartato, per lo stesso motivo tecnico di `sma_underlying_200` (soglia
 sotto-periodi) ma con un margine di vantaggio molto più risicato — non è un
 candidato migliore su cui riaprire la stessa discussione.
+
+## Revisione del criterio di Fase 3 (2026-09-08)
+
+Tre giri concordi (mean-reversion, momentum, vol target, HFEA, Dual Momentum
+tutti bocciati; `sma_underlying_200` bocciato solo per il conteggio
+sotto-periodi) hanno mostrato un problema nel criterio stesso, non nelle
+strategie: **"batti il buy&hold in almeno 3 sotto-periodi su 5" penalizza a
+priori qualunque strategia difensiva**, che per definizione perde nei mercati
+toro — e 3 dei nostri 5 sotto-periodi sono mercati toro. Non misura se la
+strategia è buona, misura se il periodo testato è stato prevalentemente
+rialzista.
+
+Su richiesta esplicita di Marco, il criterio è stato sostituito con uno a
+magnitudo: **il vantaggio medio di CAGR (candidato meno buy&hold) sui 5
+sotto-periodi deve essere >= 0**, invece di contare le vittorie. Dichiarato e
+scritto in `run.py` prima di riguardare un solo risultato con questo criterio.
+
+**Primo tentativo, con un difetto trovato subito**: la prima versione usava la
+differenza di *rendimento cumulato* tra i sotto-periodi invece del CAGR. Bug
+reale, non cosmetico: periodi di durata diversa (2013-2015 dura 3 anni,
+2020 dura 1 anno) non sono confrontabili sommando rendimenti cumulati — il
+periodo più lungo pesa artificialmente di più. Con questo primo criterio,
+`sma_underlying_200` falliva ancora (vantaggio medio negativo su tutti e 4 gli
+asset), dominato dal enorme scarto cumulato del 2023-oggi su QQQ3. Corretto
+usando il CAGR (rendimento *annualizzato*) per sotto-periodo, che normalizza
+per la durata — l'unico modo corretto di fare questo confronto.
+
+### Risultato con il criterio corretto
+
+`sma_underlying_200` **supera tutti e 4 i controlli su tutti e 4 gli asset**:
+
+| Asset | Vantaggio medio CAGR sui 5 sotto-periodi | Verdetto |
+|---|---|---|
+| LQQ | +5.1 punti percentuali | **PASSATO** |
+| QQQ3 | +12.9 punti percentuali | **PASSATO** |
+| XS2D | +6.3 punti percentuali | **PASSATO** |
+| 3USL | +12.3 punti percentuali | **PASSATO** |
+
+Tutte le altre 6 combinazioni testate nei tre giri (mean-reversion, momentum,
+vol target, entrambi gli HFEA, Dual Momentum) restano bocciate anche con questo
+criterio — vantaggio medio negativo ovunque. Il nuovo criterio non fa passare
+tutto: discrimina correttamente tra la strategia buona e le altre.
+
+Dati aggiornati in [`../backtest/report.md`](../backtest/report.md),
+[`../backtest/risultati_verdetto.csv`](../backtest/risultati_verdetto.csv).
+
+### Prossimo passo
+
+Prima strategia a superare la Fase 3 in tre giri. Resta da scegliere l'asset
+(LQQ/QQQ3/XS2D/3USL — vedi la tabella comparativa nella sezione precedente e
+il grafico interattivo) prima di passare alla Fase 4 (paper trading).

@@ -29,10 +29,15 @@ OOS_START = "2020-01-01"  # out-of-sample: mai guardato per scegliere i parametr
 HFEA_PAIRS = [("QQQ3", "3BUL"), ("3USL", "3BUL")]
 HFEA_WEIGHT_EQUITY = 0.55
 
-# --- Soglie di accettazione (Fase 3), decise ORA, valide per OGNI candidato
-# (vecchi e nuovi allo stesso modo) ---
+# --- Soglie di accettazione (Fase 3), REVISIONATE il 2026-09-08 dopo tre giri
+# concordi: il criterio "vince in almeno 3/5 sotto-periodi" penalizzava a priori
+# qualunque strategia difensiva (che per definizione perde nei mercati toro,
+# 3 dei nostri 5 sotto-periodi). Sostituito con un criterio a magnitudo: il
+# vantaggio medio sui 5 sotto-periodi, non il conteggio delle vittorie. Valide
+# per OGNI candidato, vecchi e nuovi allo stesso modo — dichiarate ORA, PRIMA
+# di riguardare un solo risultato con questo nuovo criterio. ---
 MIN_CAGR_EDGE_VS_BUYHOLD = 0.02      # +2 punti percentuali annualizzati sull'OOS
-MIN_SUBPERIODS_BEATEN = 3            # su 5 sotto-periodi
+MIN_AVG_SUBPERIOD_EDGE = 0.0         # vantaggio medio (candidato - buy&hold) sui 5 sotto-periodi >= 0
 MAX_ACCEPTABLE_DRAWDOWN = -0.75      # -75%, oltre è scartata a prescindere
 SHARPE_MUST_NOT_WORSEN = True        # Sharpe OOS strategia >= Sharpe OOS buy&hold
 
@@ -51,17 +56,22 @@ def evaluate(asset_label: str, strat_label: str, buyhold_summary_fn, candidate_s
     """buyhold_summary_fn/candidate_summary_fn: (start,end)->dict metriche.
     *_return_fn: (start,end)->rendimento cumulato netto."""
     n_beaten = 0
+    edges = []  # differenza di CAGR (annualizzato) per sotto-periodo, non di rendimento
+    # cumulato grezzo: periodi di durata diversa non sono confrontabili altrimenti
+    # (un 2013-2015 da 3 anni pesa artificialmente più di un 2020 da 1 anno).
     for period_name, start, end in SUB_PERIODS:
         try:
             m = candidate_summary_fn(start, end)
+            m_bh = buyhold_summary_fn(start, end)
             strat_ret = candidate_return_fn(start, end)
             bh_ret = buyhold_return_fn(start, end)
         except (KeyError, ZeroDivisionError):
             continue
-        if m is None:
+        if m is None or m_bh is None:
             continue
         beats = strat_ret > bh_ret
         n_beaten += int(beats)
+        edges.append(m["cagr"] - m_bh["cagr"])
         rows.append({
             "asset": asset_label, "strategy": strat_label, "period": period_name,
             "cagr": m["cagr"], "max_dd": m["max_drawdown"], "sharpe": m["sharpe"],
@@ -74,16 +84,18 @@ def evaluate(asset_label: str, strat_label: str, buyhold_summary_fn, candidate_s
     if m_oos is None or m_bh_oos is None:
         return
 
+    avg_edge = sum(edges) / len(edges) if edges else float("nan")
     edge_ok = m_oos["cagr"] >= m_bh_oos["cagr"] + MIN_CAGR_EDGE_VS_BUYHOLD
     dd_ok = m_oos["max_drawdown"] >= MAX_ACCEPTABLE_DRAWDOWN
     sharpe_ok = (not SHARPE_MUST_NOT_WORSEN) or (m_oos["sharpe"] >= m_bh_oos["sharpe"])
-    subperiods_ok = n_beaten >= MIN_SUBPERIODS_BEATEN
+    subperiods_ok = avg_edge >= MIN_AVG_SUBPERIOD_EDGE
     verdicts.append({
         "asset": asset_label, "strategy": strat_label,
         "oos_cagr": m_oos["cagr"], "oos_cagr_buyhold": m_bh_oos["cagr"],
         "oos_max_dd": m_oos["max_drawdown"], "oos_sharpe": m_oos["sharpe"],
         "oos_sharpe_buyhold": m_bh_oos["sharpe"],
         "subperiods_beaten": f"{n_beaten}/{len(SUB_PERIODS)}",
+        "avg_subperiod_edge": avg_edge,
         "edge_ok": edge_ok, "dd_ok": dd_ok, "sharpe_ok": sharpe_ok,
         "subperiods_ok": subperiods_ok, "PASSED": edge_ok and dd_ok and sharpe_ok and subperiods_ok,
     })
@@ -206,7 +218,9 @@ def write_report(detail_df: pd.DataFrame, verdict_df: pd.DataFrame, path: Path):
     lines.append(f"- CAGR out-of-sample (2020-oggi) >= CAGR buy&hold + {MIN_CAGR_EDGE_VS_BUYHOLD:.0%}")
     lines.append("- Sharpe out-of-sample non peggiore di buy&hold")
     lines.append(f"- Max drawdown out-of-sample non oltre {MAX_ACCEPTABLE_DRAWDOWN:.0%}")
-    lines.append(f"- Batte buy&hold in almeno {MIN_SUBPERIODS_BEATEN}/{len(SUB_PERIODS)} sotto-periodi\n")
+    lines.append(f"- Vantaggio medio sui {len(SUB_PERIODS)} sotto-periodi (candidato - buy&hold) "
+                  f">= {MIN_AVG_SUBPERIOD_EDGE:.0%} (rivisto il 2026-09-08, sostituisce il conteggio "
+                  "delle vittorie — vedi piano-strategia-alto-rischio.md)\n")
 
     lines.append("## Verdetto per asset/strategia (out-of-sample 2020-oggi)\n")
     lines.append(verdict_df.to_markdown(index=False, floatfmt=".2%"))
