@@ -338,8 +338,19 @@ tutto: discrimina correttamente tra la strategia buona e le altre.
 Dati aggiornati in [`../backtest/report.md`](../backtest/report.md),
 [`../backtest/risultati_verdetto.csv`](../backtest/risultati_verdetto.csv).
 
-### Prossimo passo
+### Asset scelto (2026-09-08)
 
-Prima strategia a superare la Fase 3 in tre giri. Resta da scegliere l'asset
-(LQQ/QQQ3/XS2D/3USL — vedi la tabella comparativa nella sezione precedente e
-il grafico interattivo) prima di passare alla Fase 4 (paper trading).
+**XS2D — Xtrackers S&P 500 2x Leveraged Daily Swap.** Il più conservativo dei
+quattro: drawdown OOS più basso in assoluto (-19.4%), Sharpe migliore (1.24),
+leva più bassa (2x). Vantaggio medio di CAGR più contenuto (+6.3pp) rispetto a
+QQQ3, ma percorso più sopportabile — scelta coerente con l'impostazione
+prudente di tutto il progetto (budget dedicato, perdibile, ma senza cercare la
+leva più aggressiva possibile).
+
+Ticker Trading212: `XS2Dl_EQ` (ISIN `LU0411078552`).
+
+### Prossimo passo: Fase 4 (paper trading)
+
+Strategia e asset entrambi decisi. Resta da costruire il bot che esegue
+`sma_underlying_200` su XS2D in demo su Trading212, con la cornice di rischio
+della Fase 0 (kill-switch, sizing fisso, notifiche settimanali + su eventi).
