@@ -1,6 +1,7 @@
 # Piano: strategia ad alto rischio su Trading212
 
-Stato: **bozza da validare**, nessuna fase eseguita al momento della stesura (2026-09-05).
+Stato: **Fase 2 eseguita (2026-09-07)** — vedi [risultato e verdetto](#risultato-fase-2--2026-09-07)
+in fondo al documento. Nessuna strategia attiva ha superato le soglie fissate.
 
 ## Contesto — diagnosi del bot attuale (pac-bot)
 
@@ -140,3 +141,44 @@ successiva se la shortlist non dà risultati soddisfacenti:
   marcato, rischio sproporzionato per un primo esperimento.
 - Indici europei (DAX, CAC 40, FTSE 100, EURO STOXX 50) — stessa logica, ma mercati e
   orari diversi da gestire; si aggiungono complessità senza un motivo chiaro ora.
+
+## Risultato Fase 2 (2026-09-07)
+
+Codice e dati completi in [`../backtest/`](../backtest/), report dettagliato in
+[`../backtest/report.md`](../backtest/report.md).
+
+**Verdetto: nessuna delle due strategie attive (mean-reversion evoluta, momentum) ha
+superato le soglie di Fase 3 su nessuno dei 4 ETF**, sull'out-of-sample 2020-oggi.
+Per la regola fissata all'inizio ("se non passa le soglie si scarta, non si aggiusta
+finché non torna bene"), non si passa alla Fase 4 con nessuna delle due così com'è.
+
+Perché, in breve:
+- Il periodo out-of-sample (2020-oggi) è dominato da un bull market fortissimo
+  (2023-2025 su tutti e quattro gli asset). In un mercato che sale quasi sempre,
+  qualunque strategia che stia anche solo parzialmente fuori castiga durissimo il
+  rendimento totale — è un test strutturalmente sfavorevole al market timing, non
+  un giudizio definitivo sul market timing in generale.
+- **Buy&hold vince nettamente sul rendimento** (dal +23%/anno di XS2D al +34%/anno
+  di QQQ3) ma con **drawdown tra -61% e -84%** durante il 2020/2022 — è il prezzo
+  reale della leva, non un difetto della simulazione.
+- **Momentum è l'unica logica che batte buy&hold**, e lo fa in modo consistente
+  (100% dei casi) nel sotto-periodo 2021-2022 (bear), con drawdown molto più
+  contenuti (es. QQQ3: -25% invece di -81%). Ma rinuncia a gran parte del rally
+  2023-2025 restando fuori mercato per periodi prolungati, quindi perde su CAGR
+  totale.
+- **Mean-reversion è la più debole**: né miglior rendimento né miglior protezione,
+  in pratica l'evoluzione della logica del bot originale non funziona su questa
+  classe di strumenti.
+
+**Tre strade concrete da qui, discusse con Marco:**
+
+1. **Buy&hold puro** su uno dei 4 ETF, accettando esplicitamente drawdown fino a
+   -80% come parte del rischio già concordato (300-400€ perdibili) — nessun bot
+   necessario. È la scelta con il rendimento storico più alto, ma è una scommessa
+   sulla continuazione del trend, non una strategia con un vantaggio dimostrato.
+2. **Momentum** come compromesso: rendimento medio atteso più basso, ma drawdown
+   molto più contenuti — più sensato se vedere il conto a -80% è inaccettabile a
+   prescindere dall'importo in gioco.
+3. **Fermarsi e non passare a Fase 4/5** con queste due strategie, e valutare se
+   ha senso un nuovo giro di Fase 1 (altre logiche o altre classi di asset) prima
+   di rischiare qualunque euro — anche in demo.
