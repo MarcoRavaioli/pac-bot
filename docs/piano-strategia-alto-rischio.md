@@ -111,10 +111,32 @@ Solo dopo Fasi 2-4 superate:
   eventi importanti (trade eseguito, kill-switch scattato). Niente riepilogo giornaliero.
 - **Asset confermato**: ETF a leva 2x/3x su Trading212 (nessuna alternativa da valutare).
 
-## Punto aperto — bloccato da un problema tecnico trovato il 2026-09-06
+## Candidati ETF a leva (recuperati il 2026-09-07)
 
-- Elenco esatto degli ETF a leva disponibili su Trading212 da includere come candidati:
-  **non recuperabile ora**. La API key del bot risponde `401 Unauthorized` su tutti gli
-  endpoint testati (cash e metadata/instruments). Vedi [runbook.md](runbook.md) per i
-  passi di rigenerazione della chiave — richiede accesso alla dashboard Trading212 di
-  Marco, non eseguibile da qui. Una volta rigenerata la chiave, si riprende da qui.
+Chiave API rigenerata e funzionante — vedi [runbook.md](runbook.md) per la causa del
+problema iniziale (non era la chiave: era il container che non rileggeva `.env`).
+
+Interrogando `/api/v0/equity/metadata/instruments` (16095 strumenti totali su
+Trading212), filtrando per ETF a leva **long** (esclusi short/inverse) su indici
+azionari ampi, sono emersi 39 strumenti. Elenco completo salvato in
+`data/leveraged_index_etfs.json` sul Pi (non versionato — è un dump di riferimento,
+rigenerabile in qualsiasi momento con la stessa query).
+
+**Shortlist proposta per il backtest (Fase 2)** — mi limito a S&P 500 e Nasdaq 100 a
+2x/3x, i più liquidi e conosciuti, per non disperdere la fase di validazione su 39
+varianti quasi equivalenti tra loro:
+
+| Ticker | Nome | Leva | Valuta |
+|---|---|---|---|
+| LQQ | Amundi Nasdaq-100 Daily 2x Leveraged (Acc) | 2x | EUR |
+| QQQ3 / LQQ3 | WisdomTree Nasdaq 100 3x Daily Leveraged | 3x | EUR/USD/GBX |
+| DBPG / XS2D | Xtrackers S&P 500 2x Leveraged Daily Swap (Acc) | 2x | EUR/USD |
+| 3USL / SPY3 | WisdomTree / Leverage Shares S&P 500 3x Daily Leveraged | 3x | EUR/USD |
+
+Esclusi dalla shortlist ma presenti nell'elenco completo, da valutare solo in una fase
+successiva se la shortlist non dà risultati soddisfacenti:
+
+- Leva **5x** su S&P 500 e Nasdaq 100 (WisdomTree) — decadimento da leva ancora più
+  marcato, rischio sproporzionato per un primo esperimento.
+- Indici europei (DAX, CAC 40, FTSE 100, EURO STOXX 50) — stessa logica, ma mercati e
+  orari diversi da gestire; si aggiungono complessità senza un motivo chiaro ora.

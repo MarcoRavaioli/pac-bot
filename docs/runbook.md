@@ -37,6 +37,36 @@ tuo account Trading212; conferma/correggi la sequenza mentre la segui):
    ```
    (il prossimo giro di log utile arriva al prossimo slot di valutazione, ogni 6 ore).
 
-**Bloccato da questo**: il recupero della lista esatta degli ETF a leva disponibili
-su Trading212 (punto aperto del piano strategia), che richiede una chiamata
-funzionante a `/api/v0/equity/metadata/instruments`.
+**Risolto il 2026-09-07 — causa reale diversa da quella ipotizzata sopra**: non era
+la chiave scaduta lato Trading212. Il vero problema era che **`docker restart` non
+rilegge `.env`** — le variabili d'ambiente vengono fissate alla creazione del
+container e restano quelle anche dopo un restart. Ho aggiornato il `.env` tre volte
+durante il debug e testato sempre contro la stessa chiave di maggio, ottenendo 401
+in ogni caso, finché non ho confrontato l'hash delle credenziali in memoria nel
+container con quelle nel file e ho trovato la discrepanza.
+
+Per far rileggere `.env` a un container serve **ricrearlo**, non solo riavviarlo:
+```bash
+ssh rpi-ts "cd /home/mamo/docker-data/pac-bot && docker compose up -d --no-build --force-recreate t212_bot"
+```
+(`--no-build` evita un rebuild dell'immagine, che con questo progetto fallisce
+comunque per un problema separato: `requirements.txt` non pinna le versioni,
+`pandas-ta` non è compatibile con l'ultima `pandas` risolta al momento del build —
+da sistemare separatamente se in futuro serve rifare la build da zero.)
+
+**Vale per tutti i bot su questo Pi** che usano `env_file` in docker-compose
+(corrispettivi-bot, fondo-cassa-bot, ecc.): un cambio a `.env` senza ricreare il
+container non ha alcun effetto, anche se il container si riavvia senza errori.
+
+Passi da seguire aggiornati:
+1. Genera la nuova API key da Trading212 (Impostazioni → API Beta → account
+   INVEST Practice) — vedi sezione sopra per i dettagli su IP restriction e
+   permessi.
+2. Aggiorna `.env` sul Pi con `sed` (comando sopra) o manualmente.
+3. **Ricrea il container** (non `docker restart`):
+   ```bash
+   ssh rpi-ts "docker stop t212-bot && docker rm t212-bot && cd /home/mamo/docker-data/pac-bot && docker compose up -d --no-build t212_bot"
+   ```
+4. Verifica che il container nuovo abbia le credenziali giuste confrontando
+   `docker inspect t212-bot --format '{{.Created}}'` con l'ora attuale, prima di
+   fidarti di qualunque test di autenticazione.
