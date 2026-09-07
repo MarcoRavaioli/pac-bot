@@ -55,6 +55,52 @@ def win_rate(position: pd.Series, daily_return: pd.Series) -> float:
     return (daily_return[invested_days] > 0).mean()
 
 
+def run_hfea_backtest(equity_df: pd.DataFrame, bond_df: pd.DataFrame, weight_equity: float = 0.55,
+                       rebalance_freq: str = "QE") -> dict:
+    """Portafoglio a due asset (leva azionaria + leva obbligazionaria) ribilanciato
+    periodicamente al peso target, stile HFEA. Costo di transazione applicato solo
+    nei giorni di ribilanciamento, proporzionale allo scostamento corretto."""
+    idx = equity_df.index.intersection(bond_df.index)
+    r_eq = equity_df.loc[idx, "Close"].pct_change().fillna(0.0)
+    r_bond = bond_df.loc[idx, "Close"].pct_change().fillna(0.0)
+
+    rebalance_dates = set(r_eq.resample(rebalance_freq).last().index) & set(idx)
+
+    w_eq = weight_equity
+    equity_curve = []
+    value = 1.0
+    for date in idx:
+        value *= (1 + w_eq * r_eq.loc[date] + (1 - w_eq) * r_bond.loc[date])
+        # drift naturale dei pesi dopo il rendimento del giorno
+        eq_value = w_eq * (1 + r_eq.loc[date])
+        bond_value = (1 - w_eq) * (1 + r_bond.loc[date])
+        w_eq = eq_value / (eq_value + bond_value)
+
+        if date in rebalance_dates and abs(w_eq - weight_equity) > 1e-9:
+            turnover = abs(w_eq - weight_equity)
+            value *= (1 - turnover * TRANSACTION_COST_PCT)
+            w_eq = weight_equity
+
+        equity_curve.append(value)
+
+    equity = pd.Series(equity_curve, index=idx)
+    daily_return = equity.pct_change().fillna(0.0)
+    return {"equity": equity, "daily_return": daily_return, "n_trades": len(rebalance_dates)}
+
+
+def summarize_hfea(equity_df: pd.DataFrame, bond_df: pd.DataFrame, weight_equity: float = 0.55) -> dict:
+    result = run_hfea_backtest(equity_df, bond_df, weight_equity)
+    equity = result["equity"]
+    return {
+        "cagr": cagr(equity),
+        "max_drawdown": max_drawdown(equity),
+        "sharpe": sharpe(result["daily_return"]),
+        "n_trades": result["n_trades"],
+        "win_rate": float("nan"),
+        "final_equity": equity.iloc[-1] if len(equity) else float("nan"),
+    }
+
+
 def summarize(df: pd.DataFrame, position: pd.Series) -> dict:
     result = run_backtest(df, position)
     equity = result["equity"]

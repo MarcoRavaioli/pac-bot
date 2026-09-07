@@ -182,3 +182,69 @@ Perché, in breve:
 3. **Fermarsi e non passare a Fase 4/5** con queste due strategie, e valutare se
    ha senso un nuovo giro di Fase 1 (altre logiche o altre classi di asset) prima
    di rischiare qualunque euro — anche in demo.
+
+## Ricerca su approcci pubblici e secondo giro di backtest (2026-09-07)
+
+Su richiesta di Marco ("come fanno le persone online a farlo"), ricerca su
+strategie documentate pubblicamente per ETF a leva (non contenuti social,
+letteratura/community verificabile). Tre approcci emersi e testati con la stessa
+disciplina (soglie fissate prima dei risultati):
+
+1. **SMA a 200 giorni calcolata sul sottostante non a leva** (es. indice Nasdaq
+   100 pulito) invece che sull'ETF a leva stesso — investito solo quando il
+   sottostante è sopra la sua media, altrimenti cash.
+2. **HFEA** (Hedgefundie's Excellent Adventure, Bogleheads) — leva azionaria +
+   leva obbligazionaria a lunga scadenza, ribilanciate periodicamente. Non
+   esiste l'equivalente UCITS del Treasury USA usato originariamente; sostituito
+   con WisdomTree Bund 10Y 3x (unico bond a leva lunga disponibile su T212).
+3. **Volatility targeting** — esposizione inversamente proporzionale alla
+   volatilità realizzata, invece di stare tutto dentro/fuori.
+
+Fonti: [QuantifiedStrategies](https://www.quantifiedstrategies.com/leveraged-etf-trading-strategy/),
+[Brightwork Research](https://www.brightworkresearch.com/using-letfs-combined-with-the-200-day-moving-average-trading-approach/),
+[Bogleheads — HFEA](https://www.bogleheads.org/forum/viewtopic.php?t=272007),
+[Optimized Portfolio — sintesi HFEA](https://www.optimizedportfolio.com/hedgefundie-adventure/),
+[Conditional Volatility Targeting](https://www.tandfonline.com/doi/full/10.1080/0015198X.2020.1790853).
+
+### Risultato
+
+**`sma_underlying_200` è nettamente il migliore, in modo consistente su tutti e 4
+gli asset**, su tre dei quattro criteri di Fase 3:
+
+| Asset | CAGR OOS | CAGR buy&hold | Max DD OOS | Max DD buy&hold | Sharpe OOS | Sharpe buy&hold |
+|---|---|---|---|---|---|---|
+| LQQ | 40.2% | 29.5% | -35.2% | -61.2% | 1.19 | 0.82 |
+| QQQ3 | 61.6% | 34.2% | -43.7% | -81.3% | 1.19 | 0.78 |
+| XS2D | 31.3% | 22.7% | -19.4% | -59.3% | 1.24 | 0.75 |
+| 3USL | 44.3% | 23.8% | -27.9% | -76.7% | 1.19 | 0.67 |
+
+Rendimento più alto, drawdown molto più piccolo, Sharpe migliore — su ogni singolo
+asset testato, senza eccezioni.
+
+**Ma fallisce il quarto criterio** (vince in almeno 3/5 sotto-periodi): vince
+sempre esattamente negli stessi due — 2020 (crash) e 2021-2022 (bear) — e perde
+negli altri tre (mercati in salita sostenuta, dove stare sempre dentro vince quasi
+per definizione). Il criterio conta le vittorie per sotto-periodo, non la loro
+entità: qui i due successi sono così ampi (in particolare nel 2021-2022, dove
+trasforma una perdita del buy&hold in un guadagno su tutti e 4 gli asset) che il
+CAGR composto sull'intero OOS resta comunque più alto del buy&hold nonostante il
+conteggio 2/5. **Non ho deciso da solo di ignorare la soglia** — è il tipo di
+aggiustamento a posteriori che la Fase 3 doveva impedire — ma la ragione del
+fallimento è specifica e comprensibile, non un fallimento generico della logica.
+
+**HFEA fallisce su tutti gli asset e criteri** — coerente con la lacuna nota
+trovata in ricerca: nel 2022 la decorrelazione azioni/obbligazioni su cui si basa
+si è rotta, ed è esattamente dentro la nostra finestra di test.
+
+**Vol target non emerge**: né vantaggio di rendimento né di rischio consistente
+rispetto al buy&hold.
+
+Dettaglio completo in [`../backtest/report.md`](../backtest/report.md).
+
+### Decisione da prendere con Marco
+
+`sma_underlying_200` è l'unico candidato con un vantaggio grande e consistente su
+rendimento, drawdown e Sharpe — ma tecnicamente non supera l'ultima soglia fissata
+in anticipo. Da decidere: si considera comunque superata la Fase 3 per questo
+motivo specifico (spiegato sopra, non un aggiustamento arbitrario), oppure si
+tratta il fallimento come definitivo e si passa a un altro giro di ricerca?

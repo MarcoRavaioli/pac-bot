@@ -75,9 +75,35 @@ def _apply_stop_loss_vectorized(price: pd.Series, raw_position: pd.Series) -> pd
     return pd.Series(position, index=price.index)
 
 
+def sma_underlying_200(df: pd.DataFrame, underlying_close: pd.Series) -> pd.Series:
+    """Investito nell'ETF a leva quando l'indice SOTTOSTANTE (non leva) è sopra
+    la sua media mobile a 200 giorni, altrimenti cash. Segnale pulito, calcolato
+    su un indice senza il rumore del decadimento da leva — approccio documentato
+    in letteratura (vedi docs/piano-strategia-alto-rischio.md, sezione ricerca)."""
+    underlying_aligned = underlying_close.reindex(df.index, method="ffill")
+    ma200 = underlying_aligned.rolling(200).mean()
+    position = (underlying_aligned > ma200).astype(float)
+    position[ma200.isna()] = 0.0
+    return position
+
+
+def vol_target(df: pd.DataFrame, target_annual_vol: float = 0.15, lookback: int = 20, max_position: float = 1.0) -> pd.Series:
+    """Dimensiona l'esposizione in proporzione inversa alla volatilità realizzata
+    invece di stare tutto dentro o tutto fuori: riduce l'esposizione quando il
+    mercato è nervoso, la aumenta quando è calmo (capped a max_position)."""
+    daily_return = df["Close"].pct_change()
+    realized_vol = daily_return.rolling(lookback).std() * np.sqrt(252)
+    position = (target_annual_vol / realized_vol).clip(upper=max_position)
+    position[realized_vol.isna() | (realized_vol == 0)] = 0.0
+    return position
+
+
 STRATEGIES = {
     "mean_reversion": mean_reversion,
     "momentum": momentum,
+    "vol_target": vol_target,
     "buy_and_hold": buy_and_hold,
     "cash": cash,
 }
+# sma_underlying_200 non è qui: richiede il sottostante come argomento extra,
+# gestita a parte in run.py (una per asset, vedi data.UNDERLYING).

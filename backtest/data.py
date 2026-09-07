@@ -11,7 +11,13 @@ TICKERS = {
     "QQQ3": "QQQ3.L",  # WisdomTree Nasdaq 100 3x Daily Leveraged
     "XS2D": "XS2D.L",  # Xtrackers S&P 500 2x Leveraged Daily Swap
     "3USL": "3USL.L",  # WisdomTree S&P 500 3x Daily Leveraged
+    "3BUL": "3BUL.MI",  # WisdomTree Bund 10Y 3x Daily Leveraged (per HFEA-style)
+    "NDX": "^NDX",       # Nasdaq 100 (sottostante pulito, per segnale SMA)
+    "GSPC": "^GSPC",     # S&P 500 (sottostante pulito, per segnale SMA)
 }
+
+# A quale sottostante "pulito" guardare per il segnale SMA-200 di ciascun ETF a leva
+UNDERLYING = {"LQQ": "NDX", "QQQ3": "NDX", "XS2D": "GSPC", "3USL": "GSPC"}
 
 
 OHLC = ["Open", "High", "Low", "Close"]
