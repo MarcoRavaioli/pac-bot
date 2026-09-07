@@ -241,10 +241,14 @@ rispetto al buy&hold.
 
 Dettaglio completo in [`../backtest/report.md`](../backtest/report.md).
 
-### Decisione da prendere con Marco
+### Verdetto definitivo (2026-09-08)
 
-`sma_underlying_200` è l'unico candidato con un vantaggio grande e consistente su
-rendimento, drawdown e Sharpe — ma tecnicamente non supera l'ultima soglia fissata
-in anticipo. Da decidere: si considera comunque superata la Fase 3 per questo
-motivo specifico (spiegato sopra, non un aggiustamento arbitrario), oppure si
-tratta il fallimento come definitivo e si passa a un altro giro di ricerca?
+Marco ha deciso, dopo aver visto i dati nel grafico interattivo: **la soglia non è
+superata**. Una soglia fissata in anticipo resta fissata, a prescindere da quanto
+il motivo del fallimento sembri specifico o comprensibile a posteriori — è
+esattamente la disciplina che la Fase 3 doveva garantire.
+
+`sma_underlying_200` è quindi **scartato così com'è**, nonostante il vantaggio su
+rendimento/drawdown/Sharpe. Non si passa alla Fase 4 con questa strategia.
+
+Nessun asset scelto (prematuro, dato che nessuna strategia ha superato le soglie).
