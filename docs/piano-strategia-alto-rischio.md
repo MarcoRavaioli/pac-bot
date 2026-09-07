@@ -252,3 +252,43 @@ esattamente la disciplina che la Fase 3 doveva garantire.
 rendimento/drawdown/Sharpe. Non si passa alla Fase 4 con questa strategia.
 
 Nessun asset scelto (prematuro, dato che nessuna strategia ha superato le soglie).
+
+## Terzo giro — Dual Momentum (2026-09-08)
+
+Su richiesta di Marco, un candidato concettualmente diverso: **Dual Momentum**
+(Gary Antonacci) — invece di decidere dentro/fuori su un solo asset, ruota ogni
+mese tra i 4 ETF a leva scegliendo quello con il rendimento a 12 mesi più alto,
+con un filtro assoluto che manda tutto in cash se anche il migliore ha rendimento
+negativo. Confrontato con un paniere equal-weight (25% ciascuno) mai ribilanciato
+sugli stessi 4 asset, stesse soglie di Fase 3, invariate.
+
+**Limite dichiarato in anticipo**: la versione originale di Antonacci (GEM) ruota
+tra classi di attivo davvero decorrelate (azioni USA, azioni internazionali,
+obbligazioni). Qui i 4 candidati sono tutti ETF azionari a leva (solo Nasdaq o
+S&P, 2x o 3x) — molto più correlati tra loro. Il beneficio di diversificazione
+atteso è quindi strutturalmente più debole del modello originale, non solo per
+come è stato implementato.
+
+### Risultato: più debole di `sma_underlying_200`, fallisce comunque
+
+| Metrica OOS (2020-oggi) | Dual Momentum | Equal-weight (baseline) |
+|---|---|---|
+| CAGR | 33.0% | 30.9% |
+| Max drawdown | -70.8% | (peggiore, non riportato singolarmente) |
+| Sharpe | 0.81 | 0.77 |
+
+Supera per un margine minimo CAGR, drawdown-ceiling e Sharpe, ma **fallisce il
+conteggio sotto-periodi (1/5)**: vince solo nel 2021-2022, e nel crollo 2020 va
+sostanzialmente alla pari con l'equal-weight (non lo protegge) — a differenza di
+`sma_underlying_200`, che vinceva nettamente in *entrambi* i crolli.
+
+**Causa probabile**: ruotare tra 4 ETF azionari a leva molto correlati non offre
+protezione reale quando il mercato crolla in blocco — cosa che succede spesso,
+essendo tutti legati alla stessa asset class. Conferma indiretta del limite
+dichiarato sopra prima di testare.
+
+### Verdetto
+
+Scartato, per lo stesso motivo tecnico di `sma_underlying_200` (soglia
+sotto-periodi) ma con un margine di vantaggio molto più risicato — non è un
+candidato migliore su cui riaprire la stessa discussione.

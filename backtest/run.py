@@ -10,8 +10,12 @@ from pathlib import Path
 import pandas as pd
 
 from data import download_all, UNDERLYING
-from engine import run_backtest, summarize, summarize_hfea, run_hfea_backtest
+from engine import (run_backtest, summarize, summarize_hfea, run_hfea_backtest,
+                     dual_momentum_returns, equal_weight_returns, summarize_from_returns)
 from strategies import STRATEGIES, sma_underlying_200
+
+DUAL_MOMENTUM_ASSETS = ("LQQ", "QQQ3", "XS2D", "3USL")
+DUAL_MOMENTUM_LOOKBACK = 252
 
 SUB_PERIODS = [
     ("2013-2015", "2013-01-01", "2015-12-31"),
@@ -155,6 +159,34 @@ def main():
             return r["equity"].iloc[-1] - 1 if len(r["equity"]) else float("nan")
 
         evaluate(label, "hfea", bh_summary, cand_summary, cand_return, bh_return, rows, verdicts)
+
+    # --- Dual Momentum: rotazione mensile tra i 4 ETF a leva ---
+    dm_dfs = {name: data[name] for name in DUAL_MOMENTUM_ASSETS}
+    dm_returns_full = dual_momentum_returns(dm_dfs, DUAL_MOMENTUM_LOOKBACK)
+    ew_returns_full = equal_weight_returns(dm_dfs)
+    label = f"DualMomentum({'+'.join(DUAL_MOMENTUM_ASSETS)})"
+
+    def bh_summary(start, end, r=ew_returns_full):
+        r_p = slice_period(r, start, end)
+        if len(r_p) < 30:
+            return None
+        return summarize_from_returns(r_p)
+
+    def bh_return(start, end, r=ew_returns_full):
+        r_p = slice_period(r, start, end)
+        return (1 + r_p).prod() - 1 if len(r_p) else float("nan")
+
+    def cand_summary(start, end, r=dm_returns_full):
+        r_p = slice_period(r, start, end)
+        if len(r_p) < 30:
+            return None
+        return summarize_from_returns(r_p)
+
+    def cand_return(start, end, r=dm_returns_full):
+        r_p = slice_period(r, start, end)
+        return (1 + r_p).prod() - 1 if len(r_p) else float("nan")
+
+    evaluate(label, "dual_momentum", bh_summary, cand_summary, cand_return, bh_return, rows, verdicts)
 
     detail_df = pd.DataFrame(rows)
     verdict_df = pd.DataFrame(verdicts)

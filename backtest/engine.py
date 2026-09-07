@@ -101,6 +101,69 @@ def summarize_hfea(equity_df: pd.DataFrame, bond_df: pd.DataFrame, weight_equity
     }
 
 
+def dual_momentum_returns(dfs: dict, lookback: int = 252) -> pd.Series:
+    """Rendimento giornaliero di un portafoglio Dual Momentum: ogni fine mese,
+    tiene l'asset con il rendimento a `lookback` giorni più alto tra quelli
+    candidati, solo se quel rendimento è positivo (filtro assoluto), altrimenti
+    cash. Ribilanciamento mensile, costo di transazione sul cambio di asset.
+
+    Ritorna la serie di rendimenti giornalieri (non l'equity) così può essere
+    tagliata per sotto-periodo e ricomposta da 1.0, come le altre strategie."""
+    idx = None
+    for df in dfs.values():
+        idx = df.index if idx is None else idx.intersection(df.index)
+    prices = {name: df.loc[idx, "Close"] for name, df in dfs.items()}
+    returns = {name: p.pct_change().fillna(0.0) for name, p in prices.items()}
+    momentum = {name: p.pct_change(lookback) for name, p in prices.items()}
+
+    periods = pd.PeriodIndex(idx, freq="M")
+    next_periods = periods[1:].append(pd.PeriodIndex([pd.Period("2999-01", freq="M")]))
+    rebalance_dates = set(idx[periods != next_periods])
+
+    current_asset = None
+    daily_return = []
+    for date in idx:
+        r = returns[current_asset].loc[date] if current_asset else 0.0
+        if date in rebalance_dates:
+            candidates = {name: momentum[name].loc[date] for name in dfs if not pd.isna(momentum[name].loc[date])}
+            best = max(candidates, key=candidates.get) if candidates else None
+            new_asset = best if (best and candidates[best] > 0) else None
+            if new_asset != current_asset:
+                r -= TRANSACTION_COST_PCT
+            current_asset = new_asset
+        daily_return.append(r)
+
+    return pd.Series(daily_return, index=idx)
+
+
+def equal_weight_returns(dfs: dict) -> pd.Series:
+    """Rendimento giornaliero di un paniere a pesi uguali sugli stessi asset di
+    dual_momentum_returns, mai ribilanciato — baseline onesta per isolare
+    l'effetto della rotazione, non solo quello di tenere più asset."""
+    idx = None
+    for df in dfs.values():
+        idx = df.index if idx is None else idx.intersection(df.index)
+    returns = pd.DataFrame({name: df.loc[idx, "Close"].pct_change().fillna(0.0) for name, df in dfs.items()})
+    weight = 1.0 / len(dfs)
+    values = {name: [] for name in dfs}
+    for name in dfs:
+        values[name] = weight * (1 + returns[name]).cumprod()
+    total = pd.concat(values.values(), axis=1).sum(axis=1)
+    return total.pct_change().fillna(total.iloc[0] - 1)
+
+
+def summarize_from_returns(daily_return: pd.Series) -> dict:
+    equity = (1 + daily_return).cumprod()
+    return {
+        "cagr": cagr(equity),
+        "max_drawdown": max_drawdown(equity),
+        "sharpe": sharpe(daily_return),
+        "n_trades": None,
+        "win_rate": float("nan"),
+        "final_equity": equity.iloc[-1] if len(equity) else float("nan"),
+    }
+
+
 def summarize(df: pd.DataFrame, position: pd.Series) -> dict:
     result = run_backtest(df, position)
     equity = result["equity"]
