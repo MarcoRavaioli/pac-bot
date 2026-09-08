@@ -140,3 +140,80 @@ test inaffidabili. Il vecchio codice non va perso: resta nella storia git.
 2. **Kill-switch**: -30% dal picco.
 3. **Telegram**: bot e chat ID già disponibili da Marco, credenziali salvate nel
    `.env` del Pi (non nel repo). Verificate con un messaggio di prova.
+
+---
+
+## Correzioni alle decisioni di design (2026-09-08, in fase di scrittura del codice)
+
+### Decisione #1 rifatta: il segnale viene da Yahoo, non da Trading212
+
+La raccomandazione originale (leggere VUSA dall'API Trading212 per non dipendere
+da Yahoo) **non è implementabile**. Verificato su `api.yaml` e con chiamate reali
+al conto demo:
+
+- non esiste alcun endpoint di prezzi storici — gli unici sono account, storico
+  ordini/transazioni/dividendi, metadata, ordini, pies, positions;
+- lo schema `TradableInstrument` non contiene prezzi: solo ticker, nome, ISIN,
+  valuta, quantità minime e massime;
+- l'unico prezzo esposto è `currentPrice` **dentro una posizione già aperta**.
+
+Per una SMA a 200 giorni il bot avrebbe dovuto accumulare da sé lo storico: dieci
+mesi prima del primo segnale. La fonte resta quindi Yahoo Finance, con `^GSPC` —
+lo stesso identico dato usato nel backtest, quindi zero divergenza tra ciò che è
+stato validato e ciò che gira. La robustezza che la decisione originale cercava è
+ottenuta in un altro modo:
+
+- lo storico scaricato viene unito a una cache su disco (`data/signal_cache.csv`);
+- se Yahoo non risponde, il segnale si calcola sulla cache (una media a 200 giorni
+  non cambia idea da un giorno all'altro);
+- se la cache invecchia oltre `MAX_SIGNAL_STALENESS_DAYS` (5 giorni: il buco più
+  lungo tra due chiusure USA consecutive è di 4 giorni, weekend più festivo), il
+  bot **non opera** e manda un avviso Telegram.
+
+Conseguenza collaterale, stesso motivo: l'API accetta ordini a **quantità**, non a
+controvalore (`MarketRequest` ha solo `ticker` e `quantity`, negativa per
+vendere). Anche solo per trasformare 350€ in un numero di quote serve un prezzo
+esterno, che arriva da Yahoo con il cambio del giorno. Un errore di qualche
+decimo di percento qui sposta l'importo investito di pochi centesimi, non la
+strategia; il kill-switch invece non usa mai questa stima, ma la valutazione in
+euro che dà Trading212 (`walletImpact.currentValue`).
+
+### Orario di esecuzione: 09:05 ora italiana
+
+Il piano diceva genericamente "dopo la chiusura USA". Il backtest però incassa il
+rendimento **dal giorno successivo** al segnale (`position.shift(1)` in
+`backtest/engine.py`): valutare la mattina dopo, a mercato europeo appena aperto,
+riproduce quell'ipotesi. In più l'ordine viene eseguito subito, mentre uno inviato
+alle 22:30 resterebbe in coda tutta la notte e verrebbe eseguito a un prezzo
+ignoto al momento della decisione.
+
+### Comportamento aggiunto: riallineamento con il broker
+
+Non era nel piano, l'ha fatto emergere un test. Se una posizione compare o sparisce
+senza che sia stato il bot (ordine fatto a mano dalla app, stato perso, container
+ricreato), l'equity fa un salto **contabile** che il kill-switch leggerebbe come un
+crollo di mercato — esattamente ciò che il criterio "il kill-switch non deve mai
+scattare per un bug" vieta. Il bot quindi: si riallinea a quello che dice il
+broker, riporta il picco all'equity del momento, manda una notifica e **salta il
+giro**, così chi legge la notifica ha il tempo di guardare prima che riprenda a
+operare da solo.
+
+## Stato dell'implementazione (2026-09-08)
+
+Scritto e verificato con test automatici (`tests/check_logic.py`, 48 controlli,
+broker e dati finti):
+
+- segnale SMA-200 con cache e limite di età, identico alla funzione
+  `sma_underlying_200` del backtest sugli stessi dati;
+- sizing da budget fisso con contatore interno, riancorato al costo reale in euro
+  letto da Trading212;
+- acquisto, vendita, nessun doppio acquisto, nessuno stop-loss di prezzo;
+- kill-switch: scatta a -30%, non vende, sopravvive al riavvio, `--resume`;
+- riallineamento con il broker e gestione di errori ripetuti (alert oltre 2 cicli).
+
+Verificato anche con dati veri (Yahoo, senza broker): segnale dell'8/9/2026
+`^GSPC` 7718.60 sopra la SMA-200 7141.76 → dentro; prezzo XS2D 311.34€; sizing
+1.11853 quote = 348.25€ sui 350€ allocati.
+
+**Non ancora verificato**: l'invio di un ordine reale al conto demo, l'invio di
+notifiche Telegram dal container, il deploy sul Pi con l'immagine ricostruita.

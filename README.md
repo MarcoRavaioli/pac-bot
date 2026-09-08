@@ -1,36 +1,74 @@
-# Trading 212 Automated Bot
+# pac-bot — Trading212, Fase 4 (paper trading)
 
-A Python-based automated investment bot for Trading 212, designed to run on a Raspberry Pi (ARM64). The bot monitors a list of high-risk/high-growth assets (EQQQ, VUSA, 21XH) and invests small amounts monthly based on a 20-day Z-Score strategy.
+Bot di trading su Trading212 che esegue una sola strategia, `sma_underlying_200`,
+su un ETF a leva, in **conto demo**. Gira su Raspberry Pi (ARM64) dentro Docker.
 
-## Features
+La regola in una riga: **investito nell'ETF a leva finché l'S&P 500 chiude sopra
+la sua media mobile a 200 giorni; tutto in cash quando chiude sotto.**
 
-- **Z-Score Strategy**: Buys assets when their 20-day Z-Score drops below -1.0 (mild dip).
-- **Safety Valve**: Forces a buy on the lowest Z-score asset if cash > 40€ and no trade occurred in the last 20 days.
-- **Dynamic Sizing**: Invests a safe percentage (e.g., 80%) of available free cash.
-- **Tax Compliance (Italy)**: Logs all trades to `data/trades_history.csv` including Date, Ticker, Price, Quantity, and Fees for 'Quadro RW'.
-- **Dockerized for Raspberry Pi**: Ready to run 24/7.
+Il percorso che ha portato a questa strategia (diagnosi del bot precedente,
+backtest su 4 ETF a leva, criteri di scelta) è in
+[docs/piano-strategia-alto-rischio.md](docs/piano-strategia-alto-rischio.md); il
+piano operativo di questa fase è in
+[docs/fase4-paper-trading.md](docs/fase4-paper-trading.md).
 
-## Setup Instructions
+## Come funziona
 
-1. **Clone the repository** (if applicable) and navigate to the directory.
-2. **Setup Environment Variables**:
-   ```bash
-   cp .env.example .env
-   ```
-   Edit `.env` and add your Trading 212 API key (Practice or Live).
-3. **Build and Run**:
-   ```bash
-   docker-compose up -d --build
-   ```
-4. **View Logs**:
-   ```bash
-   docker-compose logs -f
-   ```
+| | |
+|---|---|
+| Asset comprato | XS2D — Xtrackers S&P 500 2x Leveraged (`XS2Dl_EQ` su Trading212) |
+| Segnale | chiusura dell'S&P 500 (`^GSPC`, Yahoo Finance) contro la sua SMA-200 |
+| Capitale | budget fisso di 350€, tracciato da un contatore interno, **non** dal saldo del conto |
+| Frequenza | una volta al giorno, alle 09:05 ora italiana, nei giorni feriali |
+| Kill-switch | il bot si ferma se l'equity scende oltre il 30% sotto il picco |
+| Notifiche | Telegram su acquisto, vendita, kill-switch, dati mancanti, errori ripetuti |
 
-## Configuration (`.env`)
+Perché il segnale viene da Yahoo e non da Trading212: **l'API di Trading212 non
+espone prezzi storici** — non esiste alcun endpoint di candele, il metadata degli
+strumenti non contiene prezzi e `currentPrice` compare solo dentro una posizione
+già aperta. Per una media a 200 giorni non è una fonte possibile. Lo storico
+scaricato viene tenuto in cache su disco: se Yahoo non risponde il segnale resta
+calcolabile, e se la cache invecchia oltre `MAX_SIGNAL_STALENESS_DAYS` il bot
+smette di operare e avvisa su Telegram invece di decidere su prezzi vecchi.
 
-- `T212_API_KEY`: Your Account API Key.
-- `T212_API_URL`: Use `https://demo.trading212.com` for Practice or `https://live.trading212.com` for Real Money.
-- `MAX_INVESTMENT_PCT`: Percentage of total free cash to invest per signal (default: `0.8` for 80%).
-- `MIN_INVESTMENT_EUR`: Minimum trade amount (default: `5.0`).
-- `ASSETS`: Comma-separated list of instruments to trade.
+Perché le 09:05: il backtest incassa il rendimento **dal giorno successivo** al
+segnale (`position.shift(1)`). Valutare la mattina dopo la chiusura USA, a borsa
+europea appena aperta, riproduce quell'ipotesi ed esegue l'ordine su un mercato
+aperto, invece di lasciarlo in coda tutta la notte.
+
+## Comandi
+
+```bash
+# ciclo singolo, senza inviare ordini: stampa segnale, sizing e decisione
+python main.py --once --dry-run
+
+# stato interno (posizione, capitale allocato, picco, kill-switch)
+python main.py --status
+
+# riattiva il bot dopo che è scattato il kill-switch
+python main.py --resume
+
+# test della logica, senza rete e senza broker
+python tests/check_logic.py
+```
+
+## Setup
+
+1. `cp .env.example .env` e compila le variabili (vedi i commenti nel file).
+   Servono **sia** `T212_API_KEY` **sia** `TRADING212_ID`: l'autenticazione è
+   Basic, l'header con la sola chiave risponde 401.
+2. `docker compose up -d --build`
+3. `docker compose logs -f`
+
+Attenzione: dopo ogni modifica al `.env` il container va **ricreato**, non
+riavviato — `docker restart` non rilegge le variabili. Il comando esatto è in
+[docs/runbook.md](docs/runbook.md).
+
+## File
+
+- `main.py` — il bot: segnale, sizing, acquisto, vendita, kill-switch, notifiche.
+- `tests/check_logic.py` — test della logica con broker e dati finti.
+- `backtest/` — motore di backtest, strategie e dati storici usati per scegliere
+  strategia e asset (Fase 2/3). Non serve al bot in esecuzione.
+- `data/` — stato del bot (`fase4_state.json`), storico operazioni
+  (`fase4_trades.csv`) e cache del segnale (`signal_cache.csv`).
