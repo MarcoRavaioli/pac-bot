@@ -1,0 +1,25 @@
+# Il Dockerfile fa `COPY . .`: senza questo file l'immagine si porta dentro la
+# chiave API (.env), il virtualenv locale e la storia git — 362 MB invece di 30,
+# con un segreto in chiaro dentro un layer. Le variabili arrivano a runtime da
+# env_file in docker-compose, non devono stare nell'immagine.
+.env
+.env.*
+!.env.example
+.venv/
+.git/
+.gitignore
+__pycache__/
+*.pyc
+*.pyo
+
+# Stato di esecuzione: arriva dal volume montato, non dall'immagine.
+data/
+
+# Materiale che serve a scegliere la strategia, non a eseguirla. I dati storici
+# di backtest/data restano perché tests/check_logic.py li usa per confrontare il
+# segnale del bot con quello del backtest.
+backtest/.venv/
+backtest/__pycache__/
+backtest/equity_curves.json
+docs/
+api.yaml
