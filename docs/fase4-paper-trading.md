@@ -134,9 +134,9 @@ test inaffidabili. Il vecchio codice non va perso: resta nella storia git.
 - Nessuna data per la Fase 5: si decide solo dopo aver visto l'esecuzione reale
   per un periodo sufficiente.
 
-## Domande aperte per Marco
+## Decisioni finali (2026-09-08)
 
-1. Budget esatto dentro il range 300-400€ (es. 350€ tondo)?
-2. Soglia del kill-switch: va bene -30%, o preferisce un altro numero?
-3. Ha già un modo per recuperare il proprio Telegram chat ID, o serve che glielo
-   spieghi passo passo nel runbook?
+1. **Budget**: 350€.
+2. **Kill-switch**: -30% dal picco.
+3. **Telegram**: bot e chat ID già disponibili da Marco, credenziali salvate nel
+   `.env` del Pi (non nel repo). Verificate con un messaggio di prova.
