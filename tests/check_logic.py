@@ -124,8 +124,9 @@ def test_segnale_uguale_al_backtest(tmp: Path) -> None:
             return None
 
     sorgente = SenzaRete("^GSPC", 200, cache, max_staleness_days=100000)
-    ultima_data = storico.index[-1]
-    segnale = sorgente.get(now=datetime(ultima_data.year, ultima_data.month, ultima_data.day, 9, 5, tzinfo=ROME))
+    # Il giro automatico gira la mattina DOPO l'ultima chiusura disponibile.
+    giorno_dopo = storico.index[-1] + pd.Timedelta(days=1)
+    segnale = sorgente.get(now=datetime(giorno_dopo.year, giorno_dopo.month, giorno_dopo.day, 9, 5, tzinfo=ROME))
 
     atteso_sma = float(storico.rolling(200).mean().iloc[-1])
     atteso_dentro = bool(storico.iloc[-1] > atteso_sma)
@@ -168,6 +169,41 @@ def test_dati_troppo_vecchi(tmp: Path) -> None:
 # --------------------------------------------------------------------------- #
 # 2. Macchina a stati: compra, non ricompra, vende
 # --------------------------------------------------------------------------- #
+def test_barra_intraday(tmp: Path) -> None:
+    """Durante la seduta USA la riga di oggi e' una quotazione, non una chiusura."""
+    csv_gspc = RADICE / "backtest" / "data" / "GSPC.csv"
+    storico = pd.read_csv(csv_gspc, index_col=0, parse_dates=True)["Close"].astype(float).sort_index()
+
+    # Aggiungo una riga "di oggi" con un valore assurdo, come farebbe uno spike intraday.
+    oggi = pd.Timestamp("2026-09-08")
+    con_intraday = pd.concat([storico, pd.Series([1000.0], index=[oggi])])
+    cache = tmp / "cache_intraday.csv"
+    con_intraday.to_frame("Close").to_csv(cache)
+
+    class SenzaRete(SignalSource):
+        def _download(self):
+            return None
+
+    sorgente = SenzaRete("^GSPC", 200, cache, max_staleness_days=5)
+
+    pomeriggio = datetime(2026, 9, 8, 16, 15, tzinfo=ROME)   # seduta USA aperta
+    sig_pomeriggio = sorgente.get(now=pomeriggio)
+    check(sig_pomeriggio is not None and sig_pomeriggio.date.date() != oggi.date(),
+          "giro di pomeriggio: la riga di oggi viene scartata, si usa l'ultima chiusura vera")
+    check(sig_pomeriggio is not None and sig_pomeriggio.close != 1000.0,
+          "il valore intraday non entra nella decisione")
+
+    sera = datetime(2026, 9, 8, 22, 30, tzinfo=ROME)          # dopo la chiusura USA
+    sig_sera = sorgente.get(now=sera)
+    check(sig_sera is not None and sig_sera.date.date() == oggi.date(),
+          "dopo le 22:15 la riga di oggi e' una chiusura e viene usata")
+
+    mattina = datetime(2026, 9, 9, 9, 5, tzinfo=ROME)         # il giro automatico
+    sig_mattina = sorgente.get(now=mattina)
+    check(sig_mattina is not None and sig_mattina.date.date() == oggi.date(),
+          "il giro delle 09:05 usa la chiusura del giorno prima, senza scartare nulla")
+
+
 def test_acquisto(tmp: Path) -> None:
     broker = BrokerFinto(posizione=None)
     notifier = NotifierFinto()
@@ -341,6 +377,7 @@ def main() -> int:
     prove = [
         test_segnale_uguale_al_backtest,
         test_dati_troppo_vecchi,
+        test_barra_intraday,
         test_acquisto,
         test_vendita,
         test_niente_vendita_senza_segnale_spento,

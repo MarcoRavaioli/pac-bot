@@ -54,6 +54,10 @@ logger = logging.getLogger("fase4")
 
 ROME = ZoneInfo("Europe/Rome")
 
+# Ora italiana dopo la quale la chiusura USA del giorno e' consolidata su Yahoo.
+# Prima di quest'ora la riga di oggi, se c'e', e' una quotazione intraday.
+ORA_CHIUSURA_USA = (22, 15)
+
 
 # --------------------------------------------------------------------------- #
 # Configurazione
@@ -268,6 +272,28 @@ class SignalSource:
             logger.error("Download da Yahoo fallito per %s: %s", self.yf_ticker, exc)
             return None
 
+    @staticmethod
+    def _scarta_barra_incompleta(closes: pd.Series, now: datetime) -> pd.Series:
+        """Toglie la riga di oggi finché la seduta USA non è chiusa.
+
+        La strategia è definita sulle chiusure giornaliere: durante la seduta
+        Yahoo restituisce la quotazione corrente come se fosse la riga di oggi, e
+        un giro lanciato a mano nel pomeriggio deciderebbe su un prezzo intraday
+        invece che su una chiusura. Alle 09:05, l'orario del giro automatico, il
+        caso non si presenta — ma un `--once` di pomeriggio sì.
+        """
+        if len(closes) == 0:
+            return closes
+        oggi = now.date()
+        chiusura_fatta = (now.hour, now.minute) >= ORA_CHIUSURA_USA
+        if closes.index[-1].date() == oggi and not chiusura_fatta:
+            logger.info(
+                "Scarto la riga di oggi (%s): la seduta USA non è ancora chiusa, "
+                "sarebbe una quotazione intraday e non una chiusura.", oggi,
+            )
+            return closes.iloc[:-1]
+        return closes
+
     def get(self, now: Optional[datetime] = None) -> Optional[Signal]:
         """None se non c'è abbastanza storia o se i dati sono troppo vecchi."""
         now = now or datetime.now(ROME)
@@ -285,6 +311,8 @@ class SignalSource:
         else:
             logger.error("Nessun dato di segnale: né Yahoo né cache.")
             return None
+
+        closes = self._scarta_barra_incompleta(closes, now)
 
         if len(closes) < self.window:
             logger.error("Storico troppo corto per la SMA-%s: solo %s righe.", self.window, len(closes))
