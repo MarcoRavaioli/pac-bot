@@ -1,7 +1,10 @@
-requests>=2.31.0
-pandas>=2.0.0
-schedule>=1.2.0
-yfinance>=0.2.36
-python-dotenv>=1.0.1
-pandas-ta>=0.3.14b0
-pytz>=2023.3
+# Versioni pinnate: la build Docker falliva perché requirements non pinnava nulla
+# e pandas-ta non è compatibile con pandas 3.x. La strategia di Fase 4 non usa
+# indicatori di pandas-ta (solo una media mobile), quindi la dipendenza è stata
+# rimossa invece che aggirata. Queste versioni sono quelle provate in locale su
+# Python 3.11, la stessa minor dell'immagine Docker.
+requests==2.34.2
+pandas==3.0.5
+yfinance==1.7.0
+schedule==1.2.2
+python-dotenv==1.1.1

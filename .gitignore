@@ -110,3 +110,7 @@ cython_debug/
 .Trashes
 ehthumbs.db
 Thumbs.db
+
+# Stato di esecuzione del bot: vive sul Pi (volume Docker), non nel repo.
+# Attenzione: NON ignorare backtest/data/, che contiene i dati storici ripuliti a mano.
+/data/
