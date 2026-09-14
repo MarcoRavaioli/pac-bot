@@ -70,5 +70,6 @@ riavviato — `docker restart` non rilegge le variabili. Il comando esatto è in
 - `tests/check_logic.py` — test della logica con broker e dati finti.
 - `backtest/` — motore di backtest, strategie e dati storici usati per scegliere
   strategia e asset (Fase 2/3). Non serve al bot in esecuzione.
-- `data/` — stato del bot (`fase4_state.json`), storico operazioni
+- `data/` — stato del bot (`fase4_state.json`, riletto all'inizio di ogni giro: `--once` e
+  `--resume` lanciati con `docker exec` agiscono sullo stesso file del processo principale), storico operazioni
   (`fase4_trades.csv`) e cache del segnale (`signal_cache.csv`).

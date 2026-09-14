@@ -217,3 +217,32 @@ Verificato anche con dati veri (Yahoo, senza broker): segnale dell'8/9/2026
 
 **Non ancora verificato**: l'invio di un ordine reale al conto demo, l'invio di
 notifiche Telegram dal container, il deploy sul Pi con l'immagine ricostruita.
+
+## Prima settimana di esecuzione (8-14/9/2026)
+
+Quattro giri automatici alle 09:05 (9, 10, 11 e 14/9), weekend saltati, nessun
+errore. Segnale ricalcolato il 14/9 con uno script indipendente dal bot, su un
+download nuovo di `^GSPC`: chiusura e SMA-200 combaciano al centesimo su tutte e
+quattro le date. Il riavvio del 14/9 alle 05:30 è il reboot settimanale del Pi
+(crontab, lunedì 05:30): il bot è ripartito da solo e ha girato regolarmente.
+
+Emersi e corretti il 14/9:
+
+- **Stato tenuto in memoria dal processo principale.** Lo leggeva solo all'avvio
+  e lo sovrascriveva a ogni giro, ignorando le modifiche fatte da `--once` e
+  `--resume` lanciati con `docker exec`. Il 9/9 ha prodotto un falso
+  "posizione disallineata" (un giorno saltato, data dell'acquisto persa); il caso
+  grave, mai accaduto, era un `--resume` dopo il kill-switch annullato in
+  silenzio. Ora lo stato viene riletto all'inizio di ogni giro.
+- **Commissione di cambio fuori dal contatore.** `totalCost` della posizione non
+  include la commissione (347,83€ contro 348,35€ usciti). Il contatore ora legge
+  il `netValue` delle esecuzioni, e l'incasso di una vendita viene confermato al
+  giro successivo con l'esecuzione reale.
+- **Protezione sul cambio di ticker**, collegata alla decisione di passare a
+  `DBPGd_EQ` alla prossima uscita: a posizione aperta il bot rifiuta di operare
+  invece di scambiare il cambio per una vendita fatta a mano.
+
+Non ancora osservato: una vendita reale di XS2D, quindi la convenzione di
+`netValue` per una vendita con commissione di cambio è dedotta, non verificata.
+Il bot logga incasso stimato, reale e commissioni alla prima vendita: controllare
+quella riga.

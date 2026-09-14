@@ -11,7 +11,7 @@ from __future__ import annotations
 import shutil
 import sys
 import tempfile
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pandas as pd
@@ -37,6 +37,8 @@ class BrokerFinto:
         self.posizione = posizione
         self.ordini: list[tuple[str, float]] = []
         self.errore_su_lettura = False
+        self.fills: list[dict] = []
+        self.chiamate_fills = 0
 
     def get_position(self, ticker: str):
         if self.errore_su_lettura:
@@ -46,6 +48,15 @@ class BrokerFinto:
     def place_market_order(self, ticker: str, quantity: float, precision: int = 5):
         self.ordini.append((ticker, quantity))
         return {"ok": True, "quantity": round(quantity, precision)}
+
+    def get_fills(self, ticker: str, since: datetime):
+        self.chiamate_fills += 1
+        return [f for f in self.fills if f["filled_at"] >= since]
+
+
+def fill(side: str, net_value: float, fees: float, quando: str, quantita: float = 1.0) -> dict:
+    return {"side": side, "quantity": quantita, "net_value_eur": net_value, "fees_eur": fees,
+            "filled_at": datetime.fromisoformat(quando.replace("Z", "+00:00"))}
 
 
 class SegnaleFinto:
@@ -83,8 +94,9 @@ class NotifierFinto:
         return True
 
 
-def posizione(quantita: float, costo: float, valore: float) -> dict:
+def posizione(quantita: float, costo: float, valore: float, aperta_il: str = "2026-09-08T14:18:51.767Z") -> dict:
     return {
+        "created_at": aperta_il,
         "quantity": quantita,
         "quantity_sellable": quantita,
         "current_price": valore / quantita if quantita else 0.0,
@@ -94,10 +106,11 @@ def posizione(quantita: float, costo: float, valore: float) -> dict:
     }
 
 
-def bot_di_prova(tmp: Path, broker, segnale, prezzo, notifier, budget: float = 350.0) -> Fase4Bot:
+def bot_di_prova(tmp: Path, broker, segnale, prezzo, notifier, budget: float = 350.0,
+                 ticker: str = "XS2Dl_EQ") -> Fase4Bot:
     cfg = Config(
         api_key="finta", api_id="finto", api_url="https://demo.trading212.com",
-        t212_ticker="XS2Dl_EQ", yf_asset="XS2D.L", yf_signal="^GSPC", sma_window=200,
+        t212_ticker=ticker, yf_asset="XS2D.L", yf_signal="^GSPC", sma_window=200,
         budget_eur=budget, kill_switch_dd=0.30, max_staleness_days=5, run_at="09:05",
         min_order_eur=5.0, slippage_buffer=0.005, telegram_token="", telegram_chat_id="",
         data_dir=tmp,
@@ -373,6 +386,123 @@ def test_prezzo_assente(tmp: Path) -> None:
 
 
 # --------------------------------------------------------------------------- #
+# 5. Correzioni del 14/9: stato riletto, commissioni, cambio di ticker
+# --------------------------------------------------------------------------- #
+def test_stato_riletto_a_ogni_giro(tmp: Path) -> None:
+    """Riproduce il 9/9: il processo principale e un `docker exec` sullo stesso file."""
+    broker = BrokerFinto(posizione=None)
+    principale = bot_di_prova(tmp, broker, SegnaleFinto(True), PrezzoFinto(311.19), NotifierFinto())
+
+    exec_once = bot_di_prova(tmp, broker, SegnaleFinto(True), PrezzoFinto(311.19), NotifierFinto())
+    check(exec_once.run_once() == "acquisto-eseguito", "`--once` in un processo separato compra")
+    broker.posizione = posizione(1.1191, 347.83, 348.0)
+
+    notifier = NotifierFinto()
+    principale.notifier = notifier
+    esito = principale.run_once()
+    check(esito == "nessuna-azione",
+          f"il processo principale vede l'acquisto fatto da `--once` (esito: {esito}, prima era 'riallineamento')")
+    check(not any("disallineata" in m for m in notifier.messaggi), "nessun falso allarme di disallineamento")
+    check(len(broker.ordini) == 1, "nessun secondo acquisto")
+    check(principale.state.last_action_date != "", "la data dell'acquisto non viene persa")
+
+    # Kill-switch e `--resume` lanciato da un altro processo.
+    broker.posizione = posizione(1.1191, 347.83, 200.0)
+    check(principale.run_once() == "kill-switch-scattato", "scatta il kill-switch")
+    resume = bot_di_prova(tmp, broker, SegnaleFinto(True), PrezzoFinto(311.19), NotifierFinto())
+    resume.resume()
+    esito = principale.run_once()
+    check(esito != "kill-switch-attivo" and not principale.state.killed,
+          f"`--resume` da `docker exec` non viene annullato dal processo principale (esito: {esito})")
+
+
+def test_commissioni_acquisto(tmp: Path) -> None:
+    """Numeri reali del primo acquisto: totalCost 347,83€, usciti 348,35€."""
+    broker = BrokerFinto(posizione=None)
+    bot = bot_di_prova(tmp, broker, SegnaleFinto(True), PrezzoFinto(311.19), NotifierFinto())
+    bot.run_once()
+
+    broker.posizione = posizione(1.1191, 347.83, 348.0, aperta_il="2026-09-08T14:18:51.767Z")
+    # Il fill ha i secondi troncati: e' 0,767 s PRIMA dell'apertura della posizione.
+    broker.fills = [fill("BUY", 348.35, 0.52, "2026-09-08T14:18:51.000Z", 1.1191)]
+    bot.run_once()
+    check(abs(bot.state.cash_eur - 1.65) < 0.001,
+          f"cash = 350 - 348,35 usciti davvero = {bot.state.cash_eur:.2f}€ (prima 2,17€, commissione ignorata)")
+
+    bot.run_once()
+    check(abs(bot.state.cash_eur - 1.65) < 0.001, "ancoraggio con commissioni ripetibile a ogni giro")
+
+    # Storico non leggibile: si torna a totalCost senza bloccare il bot.
+    def rotto(ticker, since):
+        raise RuntimeError("429 rate limit")
+    broker.get_fills = rotto
+    esito = bot.run_once()
+    check(esito == "nessuna-azione" and abs(bot.state.cash_eur - 2.17) < 0.001,
+          "storico illeggibile: ripiego su totalCost (2,17€) e il giro prosegue")
+
+
+def test_vendita_confermata(tmp: Path) -> None:
+    broker = BrokerFinto(posizione=posizione(1.1191, 347.83, 402.0))
+    broker.fills = [fill("BUY", 348.35, 0.52, "2026-09-08T14:18:51.000Z", 1.1191)]
+    bot = bot_di_prova(tmp, broker, SegnaleFinto(True), PrezzoFinto(359.0), NotifierFinto())
+    bot.run_once()   # adotta
+    bot.run_once()
+    check(abs(bot.state.cash_eur - 1.65) < 0.001, "prima della vendita: cash 1,65€")
+
+    bot.signal_source = SegnaleFinto(False)
+    check(bot.run_once() == "vendita-eseguita", "vendita al segnale spento")
+    check(abs(bot.state.cash_eur - 403.65) < 0.001, f"subito dopo: incasso stimato 402€, cash {bot.state.cash_eur:.2f}€")
+    broker.posizione = None
+
+    # Ordine in coda a mercato chiuso: nessuna esecuzione ancora.
+    esito = bot.run_once()
+    check(esito == "nessuna-azione" and bot.state.pending_sell_since_utc != "",
+          "esecuzione non ancora nello storico: la conferma resta in sospeso, nessun riallineamento")
+
+    adesso = datetime.now(timezone.utc).isoformat()
+    broker.fills.append(fill("SELL", 401.40, 0.60, adesso, 1.1191))
+    bot.run_once()
+    check(abs(bot.state.cash_eur - 403.05) < 0.001,
+          f"esecuzione arrivata: cash corretto di -0,60€ a {bot.state.cash_eur:.2f}€")
+    check(bot.state.pending_sell_since_utc == "", "conferma chiusa")
+    bot.run_once()
+    check(abs(bot.state.cash_eur - 403.05) < 0.001, "la correzione non viene applicata due volte")
+
+
+def test_ticker_cambiato(tmp: Path) -> None:
+    broker = BrokerFinto(posizione=None)
+    bot = bot_di_prova(tmp, broker, SegnaleFinto(True), PrezzoFinto(311.19), NotifierFinto())
+    bot.run_once()
+    broker.posizione = posizione(1.1191, 347.83, 348.0)
+    bot.run_once()
+    check(bot.state.ticker == "XS2Dl_EQ", "lo stato ricorda su quale strumento e' investito")
+
+    # Errore da evitare: cambio del ticker a posizione aperta.
+    notifier = NotifierFinto()
+    sbagliato = bot_di_prova(tmp, BrokerFinto(posizione=None), SegnaleFinto(True), PrezzoFinto(60.0),
+                             notifier, ticker="DBPGd_EQ")
+    esito = sbagliato.run_once()
+    check(esito == "ticker-cambiato-da-investito" and not sbagliato.broker.ordini,
+          "ticker cambiato da investito: nessun riaccredito finto, nessun acquisto sul nuovo strumento")
+    check(sbagliato.state.invested and abs(sbagliato.state.cash_eur - 2.17) < 0.001,
+          "contatore intatto")
+    check(any("ticker" in m.lower() for m in notifier.messaggi), "notifica Telegram dell'errore")
+
+    # Procedura giusta: prima si esce, poi si cambia.
+    bot.signal_source = SegnaleFinto(False)
+    bot.run_once()
+    broker.posizione = None
+    bot.run_once()
+    nuovo_broker = BrokerFinto(posizione=None)
+    giusto = bot_di_prova(tmp, nuovo_broker, SegnaleFinto(True), PrezzoFinto(60.0), NotifierFinto(),
+                          ticker="DBPGd_EQ")
+    esito = giusto.run_once()
+    check(esito == "acquisto-eseguito" and nuovo_broker.ordini[0][0] == "DBPGd_EQ",
+          "a bot in cash il cambio di ticker funziona e il capitale passa al nuovo strumento")
+    check(giusto.state.ticker == "DBPGd_EQ", "lo stato registra il nuovo strumento")
+
+
+# --------------------------------------------------------------------------- #
 def main() -> int:
     prove = [
         test_segnale_uguale_al_backtest,
@@ -386,6 +516,10 @@ def main() -> int:
         test_errori,
         test_segnale_assente,
         test_prezzo_assente,
+        test_stato_riletto_a_ogni_giro,
+        test_commissioni_acquisto,
+        test_vendita_confermata,
+        test_ticker_cambiato,
     ]
     for prova in prove:
         print(f"\n--- {prova.__name__} ---")
