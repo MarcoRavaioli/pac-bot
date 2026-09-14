@@ -35,7 +35,7 @@ import math
 import os
 import time
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 from zoneinfo import ZoneInfo
@@ -190,8 +190,50 @@ class Trading212Broker:
                     "total_cost_eur": float(impact.get("totalCost") or 0.0),
                     "current_value_eur": float(impact.get("currentValue") or 0.0),
                     "unrealized_pl_eur": float(impact.get("unrealizedProfitLoss") or 0.0),
+                    "created_at": pos.get("createdAt") or "",
                 }
         return None
+
+    def get_fills(self, ticker: str, since: datetime) -> list[dict]:
+        """Esecuzioni sul ticker avvenute da `since` in poi, dalla più recente.
+
+        Servono per sapere quanto denaro si è mosso davvero: `netValue` è in euro
+        e comprende le commissioni. Convenzione verificata sul conto demo l'8/9:
+        acquisto XS2D `netValue` 348,35 = controvalore 347,83 + commissione di
+        cambio 0,52; vendita VUSA `netValue` 997,70 = incasso, positivo. Una
+        vendita con commissione di cambio non è ancora stata osservata.
+
+        Rate limit dell'endpoint: 6 richieste al minuto. Il bot ne fa una a giro.
+        """
+        fills: list[dict] = []
+        path = f"/api/v0/equity/history/orders?ticker={ticker}&limit=50"
+        for _ in range(5):  # 250 esecuzioni: per questa strategia è molto oltre il necessario
+            resp = requests.get(f"{self.api_url}{path}", headers=self._headers(), timeout=15)
+            resp.raise_for_status()
+            body = resp.json()
+            troppo_vecchio = False
+            for item in body.get("items") or []:
+                fill = item.get("fill") or {}
+                order = item.get("order") or {}
+                if not fill.get("filledAt"):
+                    continue  # ordine annullato o non eseguito
+                filled_at = datetime.fromisoformat(fill["filledAt"].replace("Z", "+00:00"))
+                if filled_at < since:
+                    troppo_vecchio = True
+                    continue
+                impact = fill.get("walletImpact") or {}
+                fees = sum(-float(t.get("quantity") or 0.0) for t in impact.get("taxes") or [])
+                fills.append({
+                    "side": order.get("side") or ("BUY" if float(fill.get("quantity") or 0) > 0 else "SELL"),
+                    "quantity": abs(float(fill.get("quantity") or 0.0)),
+                    "net_value_eur": float(impact.get("netValue") or 0.0),
+                    "fees_eur": round(fees, 2),
+                    "filled_at": filled_at,
+                })
+            path = body.get("nextPagePath")
+            if not path or troppo_vecchio:
+                break
+        return fills
 
     def place_market_order(self, ticker: str, quantity: float, precision: int = 5) -> dict:
         """Quantità positiva = acquisto, negativa = vendita (convenzione T212).
@@ -412,6 +454,9 @@ class State:
     consecutive_errors: int = 0
     last_error: str = ""
     stale_alert_date: str = ""            # per non ripetere l'alert ogni giro
+    ticker: str = ""                      # strumento a cui si riferiscono posizione e contatore
+    pending_sell_estimate_eur: float = 0.0  # incasso stimato dell'ultima vendita, da confermare
+    pending_sell_since_utc: str = ""      # istante della vendita, per ritrovarne l'esecuzione
 
     @classmethod
     def load(cls, path: Path, budget_eur: float) -> "State":
@@ -434,6 +479,12 @@ class State:
 # --------------------------------------------------------------------------- #
 # Bot
 # --------------------------------------------------------------------------- #
+# Tolleranza sui timestamp di Trading212. Verificato l'8/9: `filledAt` del fill
+# (14:18:51.000Z) è PRIMA del `createdAt` della posizione (14:18:51.767Z), perché
+# il fill ha i secondi troncati. Senza margine l'acquisto verrebbe escluso.
+MARGINE_TIMESTAMP = timedelta(minutes=2)
+
+
 class Fase4Bot:
     def __init__(self, cfg: Config, broker=None, signal_source=None, price_source=None, notifier=None):
         self.cfg = cfg
@@ -484,6 +535,12 @@ class Fase4Bot:
     def run_once(self, dry_run: bool = False, now: Optional[datetime] = None) -> str:
         """Un ciclo completo. Ritorna una stringa con l'esito, utile nei test."""
         now = now or datetime.now(ROME)
+        # Il processo principale vive per settimane, mentre `--once` e `--resume`
+        # girano in processi separati (`docker exec`) e scrivono lo stesso file.
+        # Tenere lo stato in memoria dall'avvio voleva dire sovrascrivere le loro
+        # modifiche: il 9/9 ha prodotto un falso "posizione disallineata", e un
+        # `--resume` dopo il kill-switch sarebbe stato annullato in silenzio.
+        self.state = State.load(self.state_path, self.cfg.budget_eur)
         self.state.last_run_utc = datetime.now(timezone.utc).isoformat(timespec="seconds")
         outcome = "nessuna-azione"
         try:
@@ -511,6 +568,27 @@ class Fase4Bot:
                     "Nessuna operazione eseguita oggi."
                 )
             return "segnale-non-disponibile"
+
+        if self.state.invested and self.state.ticker and self.state.ticker != self.cfg.t212_ticker:
+            # Cambiare T212_TICKER a posizione aperta farebbe credere al bot che la
+            # posizione sia stata venduta a mano (sul ticker nuovo non c'è nulla),
+            # con un riaccredito finto e un acquisto sul nuovo strumento mentre il
+            # vecchio resta aperto. Il cambio va fatto solo a bot in cash.
+            messaggio = (
+                f"T212_TICKER cambiato in {self.cfg.t212_ticker} mentre il bot è investito su "
+                f"{self.state.ticker}. Nessuna operazione: rimettere il ticker precedente, "
+                "oppure cambiarlo solo quando `--status` dice IN CASH."
+            )
+            self._record_error(messaggio)
+            self.notifier.send(f"⚠️ Bot Fase 4: {messaggio}")
+            return "ticker-cambiato-da-investito"
+        if not self.state.invested and self.state.ticker != self.cfg.t212_ticker:
+            if self.state.ticker:
+                logger.info("Ticker cambiato da %s a %s a bot in cash: da ora opero sul nuovo.",
+                            self.state.ticker, self.cfg.t212_ticker)
+            self.state.ticker = self.cfg.t212_ticker
+        elif not self.state.ticker:
+            self.state.ticker = self.cfg.t212_ticker  # stato scritto prima che il campo esistesse
 
         try:
             position = self.broker.get_position(self.cfg.t212_ticker)
@@ -588,8 +666,8 @@ class Fase4Bot:
         chiama deve riancorare il picco invece di leggere un finto drawdown —
         il kill-switch non deve mai scattare per un errore di lettura.
 
-        Il costo reale in euro lo dice T212 (`totalCost`), quindi il contatore
-        interno viene riancorato lì e non resta appeso alla stima fatta al
+        Il contatore interno viene riancorato al denaro uscito davvero, letto
+        dalle esecuzioni (`_costo_reale`), e non resta appeso alla stima fatta al
         momento dell'ordine. L'ancoraggio parte dal cash che c'era *prima*
         dell'acquisto, così ripeterlo a ogni giro dà sempre lo stesso risultato
         anche dopo un round-trip in utile (il budget non è più 350€ fissi).
@@ -607,7 +685,7 @@ class Fase4Bot:
             self.state.quantity = position["quantity"]
             self.state.last_position_value_eur = position["current_value_eur"]
             base = self.state.cash_before_buy if self.state.cash_before_buy >= 0 else self.state.cash_eur
-            self.state.cash_eur = round(max(0.0, base - position["total_cost_eur"]), 2)
+            self.state.cash_eur = round(max(0.0, base - self._costo_reale(position)), 2)
         elif self.state.invested:
             anomalia = True
             logger.warning(
@@ -627,7 +705,64 @@ class Fase4Bot:
             self.state.quantity = 0.0
             self.state.cash_before_buy = -1.0
             self.state.last_position_value_eur = 0.0
+
+        if not self.state.invested and self.state.pending_sell_since_utc:
+            self._conferma_vendita()
         return anomalia
+
+    def _costo_reale(self, position: dict) -> float:
+        """Euro usciti per la posizione aperta, commissioni comprese.
+
+        `totalCost` della posizione NON include la commissione di cambio: sul
+        primo acquisto era 347,83€ contro 348,35€ usciti davvero. Sommo quindi il
+        `netValue` delle esecuzioni dall'apertura della posizione: acquisti meno
+        eventuali vendite parziali fatte a mano. Se lo storico non è leggibile
+        torno a `totalCost` — sbaglia di circa lo 0,15%, non blocca il bot.
+        """
+        try:
+            aperta_il = datetime.fromisoformat(position["created_at"].replace("Z", "+00:00"))
+            fills = self.broker.get_fills(self.cfg.t212_ticker, aperta_il - MARGINE_TIMESTAMP)
+        except Exception as exc:
+            logger.warning("Storico esecuzioni non leggibile (%s): uso totalCost, senza commissioni.", exc)
+            return position["total_cost_eur"]
+
+        acquisti = [f for f in fills if f["side"] == "BUY"]
+        if not acquisti:
+            logger.warning("Nessuna esecuzione di acquisto trovata per la posizione: uso totalCost, senza commissioni.")
+            return position["total_cost_eur"]
+        vendite = [f for f in fills if f["side"] == "SELL"]
+        costo = sum(f["net_value_eur"] for f in acquisti) - sum(f["net_value_eur"] for f in vendite)
+        commissioni = sum(f["fees_eur"] for f in fills)
+        logger.info("Costo reale della posizione: %.2f€ (commissioni %.2f€, totalCost T212 %.2f€).",
+                    costo, commissioni, position["total_cost_eur"])
+        return costo
+
+    def _conferma_vendita(self) -> None:
+        """Sostituisce l'incasso stimato dell'ultima vendita con quello eseguito.
+
+        Al momento dell'ordine il bot conosce solo la valutazione di T212 di
+        pochi secondi prima, senza commissioni. Se l'esecuzione non c'è ancora
+        (ordine in coda a mercato chiuso) riprova al giro successivo.
+        """
+        try:
+            dal = datetime.fromisoformat(self.state.pending_sell_since_utc) - MARGINE_TIMESTAMP
+            vendite = [f for f in self.broker.get_fills(self.cfg.t212_ticker, dal) if f["side"] == "SELL"]
+        except Exception as exc:
+            logger.warning("Non riesco a confermare l'incasso dell'ultima vendita (%s): riprovo al prossimo giro.", exc)
+            return
+        if not vendite:
+            logger.info("Vendita non ancora eseguita secondo lo storico: riprovo al prossimo giro.")
+            return
+        reale = sum(f["net_value_eur"] for f in vendite)
+        commissioni = sum(f["fees_eur"] for f in vendite)
+        scarto = reale - self.state.pending_sell_estimate_eur
+        self.state.cash_eur = round(max(0.0, self.state.cash_eur + scarto), 2)
+        logger.info(
+            "Vendita confermata: incasso %.2f€ (stimato %.2f€, commissioni %.2f€): cash corretto di %+.2f€ a %.2f€.",
+            reale, self.state.pending_sell_estimate_eur, commissioni, scarto, self.state.cash_eur,
+        )
+        self.state.pending_sell_estimate_eur = 0.0
+        self.state.pending_sell_since_utc = ""
 
     def _equity(self, position: Optional[dict]) -> float:
         """Capitale allocato + valore corrente della posizione, in euro. Il
@@ -669,6 +804,7 @@ class Fase4Bot:
             return "ordine-rifiutato"
 
         eseguita = float(result.get("quantity", quantity))
+        self.state.ticker = self.cfg.t212_ticker
         self.state.cash_before_buy = self.state.cash_eur
         self.state.invested = True
         self.state.quantity = eseguita
@@ -701,6 +837,7 @@ class Fase4Bot:
             self._log_trade("SELL-DRY", quantity, prezzo_eur, signal, "dry-run, nessun ordine inviato")
             return "vendita-simulata"
 
+        inviata_il = datetime.now(timezone.utc).isoformat(timespec="seconds")
         try:
             result = self.broker.place_market_order(self.cfg.t212_ticker, -quantity)
         except Exception as exc:
@@ -710,11 +847,13 @@ class Fase4Bot:
             self._record_error(f"Ordine di vendita rifiutato: {result.get('error')}")
             return "ordine-rifiutato"
 
-        # Il ricavo esatto dipende dal prezzo di esecuzione, che non conosciamo
-        # nell'istante dell'ordine: uso la valutazione di T212 di pochi secondi
-        # prima. Sul kill-switch (-30%) uno scarto di frazioni di punto è
-        # ininfluente, e al prossimo giro `_reconcile` vede la posizione chiusa.
+        # Il ricavo esatto dipende dal prezzo di esecuzione e dalle commissioni,
+        # che non conosciamo nell'istante dell'ordine: accredito la valutazione
+        # di T212 di pochi secondi prima e la correggo al giro successivo con
+        # l'incasso eseguito (`_conferma_vendita`).
         self.state.cash_eur = round(self.state.cash_eur + valore, 2)
+        self.state.pending_sell_estimate_eur = valore
+        self.state.pending_sell_since_utc = inviata_il
         self.state.invested = False
         self.state.quantity = 0.0
         self.state.cash_before_buy = -1.0
@@ -733,6 +872,7 @@ class Fase4Bot:
     def resume(self) -> None:
         """Riattiva il bot dopo un kill-switch, riportando il picco al valore
         attuale: altrimenti ripartirebbe già in drawdown e si fermerebbe subito."""
+        self.state = State.load(self.state_path, self.cfg.budget_eur)
         if not self.state.killed:
             logger.info("Il kill-switch non è attivo: niente da riattivare.")
             return

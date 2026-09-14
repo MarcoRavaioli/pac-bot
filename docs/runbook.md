@@ -148,16 +148,40 @@ La riga riporta chiusura dell'S&P 500, SMA-200 e decisione. Confrontala con un
 grafico dell'S&P 500 con media a 200 giorni (per esempio su TradingView): devono
 dire la stessa cosa.
 
-### Variante EUR dello stesso ETF (da valutare per la Fase 5)
+### Passaggio alla linea EUR dello stesso ETF (deciso il 14/9, alla prossima uscita)
 
 `XS2Dl_EQ` è la linea LSE dell'ETF, quotata in **USD**. Su Trading212 esiste la
 stessa ISIN (LU0411078552) quotata in **EUR** su Xetra: `DBPGd_EQ`. Stesso fondo,
-stessa esposizione; con un conto in euro la linea EUR evita la commissione di
-cambio che T212 applica sugli strumenti in valuta diversa (0,15% per operazione
-sul conto reale — irrilevante in demo, non in Fase 5). Per passare alla linea EUR
-bastano due righe nel `.env`:
+stessa esposizione, ma senza la commissione di cambio.
+
+**Correzione dell'8/9**: avevo scritto che la commissione era irrilevante in demo.
+Falso — l'esecuzione del primo acquisto riporta `CURRENCY_CONVERSION_FEE -0,52€`
+su 348,35€ (0,15%) anche sul conto demo. Vale per ogni acquisto e ogni vendita.
+
+**Decisione del 14/9**: non si vende apposta per cambiare strumento (costerebbe
+circa 1€ tra vendita e riacquisto). Il cambio si fa alla prossima uscita
+naturale, quando il segnale si spegne e il bot vende da solo.
+
+**Quando farlo**: dopo la notifica 🔴 VENDITA, e comunque solo se lo stato dice
+IN CASH:
+
+```bash
+ssh rpi-ts "docker exec t212-bot python main.py --status"
+```
+
+**Come**: sul Pi, nel `.env`, cambia le due righe
 
 ```
 T212_TICKER=DBPGd_EQ
 YF_ASSET_TICKER=DBPG.DE
 ```
+
+e **ricrea** il container (non `docker restart`, che non rilegge il `.env`):
+
+```bash
+ssh rpi-ts "cd /home/mamo/docker-data/pac-bot && docker compose up -d --no-build --force-recreate t212_bot"
+```
+
+Se per errore il ticker viene cambiato a posizione aperta, il bot non opera e
+manda un avviso su Telegram: basta rimettere il ticker precedente e ricreare il
+container. Il capitale allocato passa intatto al nuovo strumento.
